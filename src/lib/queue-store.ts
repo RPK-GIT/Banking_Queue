@@ -6,6 +6,7 @@ import { notifyTransient } from "./notifications"
 import {
   callNextCustomer,
   completeCurrentService,
+  COUNTER_DEFS,
   emptyState,
   issueToken,
   transferCustomer,
@@ -50,6 +51,10 @@ function loadFromStorage(): QueueState | null {
     if (!raw) return null
     const parsed = JSON.parse(raw) as { state?: QueueState }
     if (!parsed.state?.counters?.length || !parsed.state.customers) return null
+    // discard state saved by an older branch layout (e.g. the 5-counter era)
+    const storedIds = parsed.state.counters.map((c) => c.id).join(",")
+    const currentIds = COUNTER_DEFS.map((c) => c.id).join(",")
+    if (storedIds !== currentIds) return null
     return parsed.state
   } catch {
     return null
