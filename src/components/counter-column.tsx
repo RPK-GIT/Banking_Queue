@@ -1,11 +1,13 @@
 "use client"
 
+import { useState } from "react"
 import { AnimatePresence, motion } from "motion/react"
 import {
   ArrowRight,
   ArrowRightLeft,
   BellRing,
   CheckCheck,
+  ChevronDown,
   UserRound,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -23,6 +25,9 @@ import { useQueueStore } from "@/lib/queue-store"
 import type { Counter } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+/** waiting cards shown before collapsing behind "+ N more waiting" */
+const VISIBLE_QUEUE_LIMIT = 4
+
 interface CounterColumnProps {
   counter: Counter
   now: number
@@ -39,11 +44,18 @@ export function CounterColumn({
   const customers = useQueueStore((s) => s.state.customers)
   const callNext = useQueueStore((s) => s.callNext)
   const completeService = useQueueStore((s) => s.completeService)
+  const [showAll, setShowAll] = useState(false)
 
   const serving = counter.currentCustomerId
     ? customers[counter.currentCustomerId]
     : null
   const servingStep = serving?.journey[serving.journey.length - 1]
+
+  const hiddenCount = counter.queue.length - VISIBLE_QUEUE_LIMIT
+  const visibleQueue =
+    showAll || hiddenCount <= 0
+      ? counter.queue
+      : counter.queue.slice(0, VISIBLE_QUEUE_LIMIT)
 
   function handleCallNext() {
     const called = callNext(counter.id)
@@ -63,9 +75,9 @@ export function CounterColumn({
   }
 
   return (
-    <Card className="flex h-full min-w-0 flex-col gap-0 overflow-hidden p-0 shadow-xs">
+    <Card className="flex h-full min-h-0 min-w-0 flex-col gap-0 overflow-hidden p-0 shadow-xs">
       {/* Counter header */}
-      <div className="border-b bg-muted/40 px-3 py-2.5">
+      <div className="shrink-0 border-b bg-muted/40 px-3 py-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-[13px] font-semibold">
             Counter {counter.number}
@@ -99,7 +111,7 @@ export function CounterColumn({
       </div>
 
       {/* Currently serving */}
-      <div className="border-b px-3 py-2.5">
+      <div className="shrink-0 border-b px-3 py-2">
         <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
           Now serving
         </p>
@@ -119,7 +131,7 @@ export function CounterColumn({
                 type="button"
                 onClick={() => onSelectCustomer(serving.id)}
                 title={`View ${serving.token}'s journey`}
-                className="w-full rounded-lg border border-blue-200 bg-blue-50/70 px-2.5 py-2 text-left transition-colors outline-none hover:border-blue-300 focus-visible:ring-2 focus-visible:ring-ring/60"
+                className="w-full rounded-lg border border-blue-200 bg-blue-50/70 px-2.5 py-1.5 text-left transition-colors outline-none hover:border-blue-300 focus-visible:ring-2 focus-visible:ring-ring/60"
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-mono text-sm font-bold text-blue-800">
@@ -162,7 +174,7 @@ export function CounterColumn({
               exit={{ opacity: 0 }}
               className="mt-1.5"
             >
-              <div className="rounded-lg border border-dashed px-2.5 py-2 text-center text-xs text-muted-foreground">
+              <div className="rounded-lg border border-dashed px-2.5 py-1.5 text-center text-xs text-muted-foreground">
                 Counter free
               </div>
               <Tooltip>
@@ -189,9 +201,9 @@ export function CounterColumn({
         </AnimatePresence>
       </div>
 
-      {/* FIFO queue */}
-      <div className="flex flex-1 flex-col gap-1.5 bg-muted/20 px-3 py-2.5">
-        <div className="flex items-center justify-between text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+      {/* FIFO queue — scrolls INSIDE the card, never the page */}
+      <div className="flex min-h-0 flex-1 flex-col bg-muted/20">
+        <div className="flex shrink-0 items-center justify-between px-3 pt-2 pb-1.5 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
           <span>FIFO queue · {counter.queue.length} waiting</span>
           <span className="flex items-center gap-0.5 normal-case">
             first
@@ -199,9 +211,9 @@ export function CounterColumn({
             last
           </span>
         </div>
-        <div className="flex flex-col gap-1.5">
+        <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3 pb-2">
           <AnimatePresence mode="popLayout" initial={false}>
-            {counter.queue.map((customerId, index) => {
+            {visibleQueue.map((customerId, index) => {
               const customer = customers[customerId]
               if (!customer) return null
               return (
@@ -215,8 +227,21 @@ export function CounterColumn({
               )
             })}
           </AnimatePresence>
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAll((s) => !s)}
+              className="flex shrink-0 items-center justify-center gap-1 rounded-lg border border-dashed px-2 py-1.5 text-[11px] font-medium text-muted-foreground outline-none hover:bg-muted/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+            >
+              <ChevronDown
+                className={cn("size-3 transition-transform", showAll && "rotate-180")}
+                aria-hidden
+              />
+              {showAll ? "Show less" : `+ ${hiddenCount} more waiting`}
+            </button>
+          )}
           {counter.queue.length === 0 && (
-            <p className="rounded-lg border border-dashed px-2 py-3 text-center text-[11px] text-muted-foreground">
+            <p className="rounded-lg border border-dashed px-2 py-2.5 text-center text-[11px] text-muted-foreground">
               Queue empty
             </p>
           )}

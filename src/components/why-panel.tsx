@@ -1,12 +1,14 @@
 "use client"
 
-import { ChevronDown, Eye, Route, Scale } from "lucide-react"
+import { Eye, Route, Scale } from "lucide-react"
 
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 
 const BENEFITS = [
   {
@@ -26,18 +28,23 @@ const BENEFITS = [
   },
 ]
 
-export function WhyPanel() {
+export function WhyDialog({
+  open,
+  onClose,
+}: {
+  open: boolean
+  onClose: () => void
+}) {
   return (
-    <Collapsible className="rounded-xl border bg-card shadow-xs">
-      <CollapsibleTrigger className="group flex w-full items-center justify-between px-4 py-3 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
-        Why Smart Queue?
-        <ChevronDown
-          className="size-4 text-muted-foreground transition-transform group-data-panel-open:rotate-180"
-          aria-hidden
-        />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="grid gap-3 border-t px-4 py-4 sm:grid-cols-3">
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Why Smart Queue?</DialogTitle>
+          <DialogDescription>
+            One token, one journey — visible to everyone.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-4">
           {BENEFITS.map((benefit) => (
             <div key={benefit.title} className="flex items-start gap-3">
               <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -50,7 +57,7 @@ export function WhyPanel() {
             </div>
           ))}
         </div>
-      </CollapsibleContent>
-    </Collapsible>
+      </DialogContent>
+    </Dialog>
   )
 }

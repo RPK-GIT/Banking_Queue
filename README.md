@@ -20,10 +20,15 @@ Smart Bank Queue fixes this with one simple idea:
 > counter's queue — always appended to the **end** (strict FIFO), with the
 > complete journey history preserved and visible.
 
-The dashboard shows: a reception/teller panel, five live counter queues, a
-per-token journey visualization with a full audit trail, a live activity feed,
-KPIs, and a scripted **Play Demo** that walks a manager through the whole
-concept in about a minute.
+The app is a **fixed single-screen branch operations workspace** (no page
+scrolling at desktop resolutions): a collapsible left control pane (reception
++ demonstration controls), a compact executive KPI strip, a full-height Live
+Queues board for all five counters (long queues collapse behind "+ N more
+waiting" and scroll inside their card), a Live Activity slide-over drawer, a
+per-token journey dialog with a full audit trail, and a floating **Customer
+View** (simulated WhatsApp) so the manager sees the bank view and the
+customer view side by side. A scripted **Live Demo** walks a manager through
+the whole concept in about a minute.
 
 ## How to run
 
@@ -55,12 +60,12 @@ scenario, and persisted to `localStorage` so a refresh keeps the demo state.
    transferred to the **end** of Counter 5's queue, then Counter 3, and finally
    completes — while T-101 finishes his 4-counter journey.
 4. Click **⏸ Pause** at any point. Pause freezes the *simulation engine only* —
-   the dashboard stays fully interactive. Open the floating **Customer
-   WhatsApp** dock, switch between customers' phones, scroll their
-   conversations, compare with the Journey dialog (bank view vs customer view),
-   change speed (0.5× / 1× / 2× / 4×), or click **⏭ Step** to run exactly one
-   event at a time. **▶ Resume** continues from the exact remaining time — no
-   restarted, skipped or duplicated events.
+   the dashboard stays fully interactive. Click **💬 Customer View**
+   (bottom-right), pick a customer to open their simulated WhatsApp phone,
+   switch phones, scroll conversations, compare with the Journey dialog (bank
+   view vs customer view), change speed (0.5× / 1× / 2× / 4×), or click
+   **⏭ Step** to run exactly one event at a time. **▶ Resume** continues from
+   the exact remaining time — no restarted, skipped or duplicated events.
 5. Try it manually: **Issue Token**, then **Transfer** someone from a counter —
    the confirmation shows their new position at the end of the destination queue.
 
@@ -81,7 +86,8 @@ src/
     format.ts         # time/duration formatting
   hooks/use-now.ts    # 1s ticker for live clocks and wait times
   components/
-    dashboard.tsx     # single-screen composition
+    dashboard.tsx     # fixed app shell: collapsible left pane + KPI strip +
+                      # full-height queue board + activity drawer (no page scroll)
     app-header.tsx, kpi-strip.tsx, new-customer-card.tsx, demo-controls.tsx
     queue-board.tsx, counter-column.tsx, customer-card.tsx
     journey-dialog.tsx, transfer-dialog.tsx, activity-feed.tsx, why-panel.tsx

@@ -9,7 +9,6 @@ import {
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
-import { Card } from "@/components/ui/card"
 import { formatDuration } from "@/lib/format"
 import { useQueueStore } from "@/lib/queue-store"
 import { useNow } from "@/hooks/use-now"
@@ -73,28 +72,27 @@ export function KpiStrip() {
   return (
     <section
       aria-label="Branch key metrics"
-      className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5"
+      className="grid shrink-0 grid-cols-5 divide-x rounded-xl border bg-card shadow-xs"
     >
       {kpis.map((kpi) => (
-        <Card
-          key={kpi.label}
-          className="flex-row items-center gap-3 px-4 py-3 shadow-xs"
-        >
+        <div key={kpi.label} className="flex items-center gap-2.5 px-3 py-2.5">
           <div
             className={cn(
-              "flex size-9 shrink-0 items-center justify-center rounded-lg",
+              "flex size-8 shrink-0 items-center justify-center rounded-lg",
               kpi.accent
             )}
           >
-            <kpi.icon className="size-4.5" aria-hidden />
+            <kpi.icon className="size-4" aria-hidden />
           </div>
           <div className="min-w-0">
-            <p className="truncate text-xs text-muted-foreground">{kpi.label}</p>
-            <p className="text-xl font-semibold tabular-nums tracking-tight">
+            <p className="text-lg leading-6 font-semibold tabular-nums tracking-tight">
               {kpi.value}
             </p>
+            <p className="truncate text-[11px] leading-3 text-muted-foreground">
+              {kpi.label}
+            </p>
           </div>
-        </Card>
+        </div>
       ))}
     </section>
   )

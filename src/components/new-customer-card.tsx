@@ -5,13 +5,6 @@ import { Sparkles, TicketPlus, UserPlus } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -85,19 +78,19 @@ export function NewCustomerCard() {
   }
 
   return (
-    <Card className="gap-4 shadow-xs">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
+    <section aria-label="New customer" className="flex flex-col gap-3">
+      <div>
+        <h2 className="flex items-center gap-2 text-sm font-semibold">
           <UserPlus className="size-4 text-primary" aria-hidden />
           New Customer
-        </CardTitle>
-        <CardDescription>
+        </h2>
+        <p className="mt-0.5 text-xs text-muted-foreground">
           Reception issues a token that follows the customer everywhere.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
+        </p>
+      </div>
+      <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="customer-name">Customer name</Label>
+          <Label htmlFor="customer-name">Customer</Label>
           <Input
             id="customer-name"
             placeholder="Optional — e.g. Asha Rao"
@@ -108,7 +101,7 @@ export function NewCustomerCard() {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="service-type">Service request</Label>
+          <Label htmlFor="service-type">Service</Label>
           <Select
             value={serviceType}
             onValueChange={(v) => setServiceType(v as ServiceType)}
@@ -127,7 +120,7 @@ export function NewCustomerCard() {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="first-counter">Assign first counter</Label>
+          <Label htmlFor="first-counter">First Counter</Label>
           <Select value={counterId} onValueChange={(v) => setCounterId(String(v))}>
             <SelectTrigger id="first-counter" className="w-full">
               <SelectValue>
@@ -152,17 +145,20 @@ export function NewCustomerCard() {
           Issue Token
         </Button>
 
-        <div className="grid grid-cols-1 gap-2">
+        <div className="flex flex-col gap-2">
+          <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+            Quick Demo
+          </p>
           <Button variant="outline" size="sm" onClick={handleWalkIn}>
             <UserPlus data-icon="inline-start" aria-hidden />
             + Walk-in Customer
           </Button>
           <Button variant="outline" size="sm" onClick={handleComplexRequest}>
             <Sparkles data-icon="inline-start" aria-hidden />
-            + Complex Request (multi-counter)
+            + Complex Request
           </Button>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   )
 }

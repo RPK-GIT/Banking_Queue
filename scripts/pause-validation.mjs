@@ -41,8 +41,12 @@ check("pause shows paused indicator + step counter", stepAtPause > 0)
 await page.waitForTimeout(7000)
 check("no events fire while paused", (await pausedStep()) === stepAtPause)
 
-// 4. Open Ravi's WhatsApp (default selection is T-101)
-await page.click("button[aria-label='Open Customer WhatsApp']")
+// 4. Open Customer View → pick Ravi from the selector
+await page.click("button[aria-label='Open Customer View']")
+await page.waitForSelector("text=Customer View · Simulated", { timeout: 5000 })
+await page.click(
+  "div[aria-label='Customer WhatsApp selector'] button:has-text('Ravi Kumar')"
+)
 await page.waitForSelector("text=Viewing phone of", { timeout: 5000 })
 check(
   "WhatsApp opens on Ravi while paused",
@@ -123,10 +127,13 @@ await page.waitForSelector("text=Demo complete", { timeout: 60000 })
 check("demo runs to completion after resume", true)
 
 // no duplicated events: T-115 was issued exactly once in the activity feed
+await page.click("button[aria-label='Toggle live activity panel']")
+await page.waitForSelector("text=Live Activity", { timeout: 5000 })
 const issuedCount = await page
   .locator("text=/T-115 issued to Aisha Khan/")
   .count()
 check("no duplicate events (T-115 issued exactly once)", issuedCount === 1)
+await page.click("button[aria-label='Close activity panel']")
 
 // Aisha's WhatsApp shows a single completion message
 await page.click("button[aria-label='Switch customer']")

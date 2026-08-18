@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { AnimatePresence, motion } from "motion/react"
 import {
   ChevronDown,
+  GripHorizontal,
   Maximize2,
   MessageCircle,
   Minimize2,
@@ -34,59 +35,197 @@ const STATUS_LABEL = {
   completed: "Completed",
 } as const
 
+type DockView = "closed" | "selector" | "phone"
+
 /**
- * Simulated customer phone (WhatsApp) — a floating dock that is ALWAYS
- * interactive, including while the demo engine is paused. Everything shown is
- * derived from queue state, so a paused simulation reads as an exact snapshot.
+ * Customer Lens — the customer's simulated WhatsApp view of the SAME queue
+ * state the dashboard shows. Floating, always interactive (also while the
+ * demo engine is paused), everything derived from state.
  */
 export function WhatsAppDock({
   onOpenJourney,
 }: {
   onOpenJourney: (customerId: string) => void
 }) {
-  const customers = useQueueStore((s) => s.state.customers)
   const state = useQueueStore((s) => s.state)
-  const [open, setOpen] = useState(false)
+  const [view, setView] = useState<DockView>("closed")
   const [expanded, setExpanded] = useState(false)
+  const [showCompleted, setShowCompleted] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const sorted = useMemo(
-    () => Object.values(customers).sort((a, b) => tokenNumber(a) - tokenNumber(b)),
-    [customers]
+    () =>
+      Object.values(state.customers).sort(
+        (a, b) => tokenNumber(a) - tokenNumber(b)
+      ),
+    [state.customers]
   )
+  const active = sorted.filter((c) => c.status !== "completed")
+  const completed = sorted.filter((c) => c.status === "completed")
 
-  // default to Ravi (the complex journey) and heal a stale selection
-  const selected =
-    (selectedId && customers[selectedId]) ||
-    sorted.find((c) => c.token === "T-101") ||
-    sorted[0] ||
-    null
-
+  // heal a stale selection (e.g. after Clear All / Restart)
+  const selected = (selectedId && state.customers[selectedId]) || null
   const messages = selected ? buildWhatsAppMessages(selected) : []
   const status = selected ? customerLiveStatus(state, selected.id) : null
 
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages.length, selected?.id, open, expanded])
+  }, [messages.length, selected?.id, view, expanded])
+
+  function openPhone(customerId: string) {
+    setSelectedId(customerId)
+    setView("phone")
+  }
+
+  function selectorLine(customer: Customer): string {
+    const s = customerLiveStatus(state, customer.id)
+    if (s.status === "completed") return `${customer.token} · Completed`
+    const where = `Counter ${s.counterId}`
+    return s.position !== null
+      ? `${customer.token} · ${where} · #${s.position}`
+      : `${customer.token} · ${where} · being served`
+  }
+
+  const dragConstraints =
+    typeof window !== "undefined"
+      ? {
+          left: -(window.innerWidth - (expanded ? 420 : 370)),
+          right: 0,
+          top: -(window.innerHeight - (expanded ? 720 : 620)),
+          bottom: 0,
+        }
+      : undefined
 
   return (
     <div className="fixed right-4 bottom-4 z-50 flex flex-col items-end gap-2">
       <AnimatePresence>
-        {open && selected && status && (
+        {/* customer selector */}
+        {view === "selector" && (
           <motion.div
+            key="selector"
+            initial={{ opacity: 0, y: 12, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.97 }}
+            transition={{ duration: 0.15 }}
+            className="flex max-h-[60vh] w-72 flex-col overflow-hidden rounded-xl border bg-card shadow-xl"
+            role="dialog"
+            aria-label="Customer WhatsApp selector"
+          >
+            <div className="border-b px-3 py-2">
+              <p className="text-xs font-semibold tracking-wide uppercase">
+                Customer WhatsApp
+              </p>
+              <p className="text-[10px] text-muted-foreground">
+                Customer View · Simulated — pick a phone to inspect
+              </p>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+              {active.map((customer) => {
+                const s = customerLiveStatus(state, customer.id)
+                return (
+                  <button
+                    key={customer.id}
+                    type="button"
+                    onClick={() => openPhone(customer.id)}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60"
+                  >
+                    <span
+                      className={cn(
+                        "size-2 shrink-0 rounded-full",
+                        s.status === "serving" ? "bg-blue-500" : "bg-amber-400"
+                      )}
+                      aria-hidden
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate text-[13px] font-medium">
+                        {customer.name}
+                      </span>
+                      <span className="block truncate text-[11px] text-muted-foreground">
+                        {selectorLine(customer)}
+                      </span>
+                    </span>
+                  </button>
+                )
+              })}
+              {active.length === 0 && (
+                <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                  No active customers right now.
+                </p>
+              )}
+              {completed.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShowCompleted((s) => !s)}
+                    className="mt-1 flex w-full items-center justify-center gap-1 rounded-lg border border-dashed px-2 py-1 text-[11px] text-muted-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60"
+                  >
+                    <ChevronDown
+                      className={cn(
+                        "size-3 transition-transform",
+                        showCompleted && "rotate-180"
+                      )}
+                      aria-hidden
+                    />
+                    {showCompleted
+                      ? "Hide completed"
+                      : `${completed.length} completed`}
+                  </button>
+                  {showCompleted &&
+                    completed.map((customer) => (
+                      <button
+                        key={customer.id}
+                        type="button"
+                        onClick={() => openPhone(customer.id)}
+                        className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60"
+                      >
+                        <span
+                          className="size-2 shrink-0 rounded-full bg-emerald-500"
+                          aria-hidden
+                        />
+                        <span className="min-w-0">
+                          <span className="block truncate text-[13px] font-medium">
+                            {customer.name}
+                          </span>
+                          <span className="block truncate text-[11px] text-muted-foreground">
+                            {selectorLine(customer)}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                </>
+              )}
+            </div>
+          </motion.div>
+        )}
+
+        {/* floating phone */}
+        {view === "phone" && selected && status && (
+          <motion.div
+            key="phone"
+            drag
+            dragConstraints={dragConstraints}
+            dragMomentum={false}
+            dragElastic={0.05}
             initial={{ opacity: 0, y: 16, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 16, scale: 0.96 }}
             transition={{ duration: 0.18 }}
             className={cn(
               "flex flex-col overflow-hidden rounded-2xl border bg-card shadow-xl",
-              expanded ? "h-[38rem] w-[26rem] max-h-[85vh]" : "h-[26rem] w-80 max-h-[70vh]"
+              expanded
+                ? "h-[660px] max-h-[calc(100vh-6.5rem)] w-[380px]"
+                : "h-[560px] max-h-[calc(100vh-6.5rem)] w-[330px]"
             )}
             role="dialog"
             aria-label={`WhatsApp view for ${selected.name}`}
           >
+            {/* lens label + drag handle */}
+            <div className="flex cursor-grab items-center justify-center gap-1.5 bg-[#054d44] py-1 text-[9px] font-semibold tracking-widest text-white/70 uppercase active:cursor-grabbing">
+              <GripHorizontal className="size-3" aria-hidden />
+              Customer View · Simulated
+            </div>
             {/* phone header */}
             <div className="flex items-center gap-2 bg-[#075e54] px-3 py-2 text-white">
               <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/20 text-xs font-bold">
@@ -97,7 +236,7 @@ export function WhatsAppDock({
                   .join("")}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold leading-tight">
+                <p className="truncate text-sm leading-tight font-semibold">
                   {selected.name}
                 </p>
                 <p className="text-[11px] leading-tight text-white/80">
@@ -118,7 +257,7 @@ export function WhatsAppDock({
               </button>
               <button
                 type="button"
-                onClick={() => setOpen(false)}
+                onClick={() => setView("closed")}
                 aria-label="Close WhatsApp window"
                 className="rounded-md p-1.5 outline-none hover:bg-white/15 focus-visible:ring-2 focus-visible:ring-white/60"
               >
@@ -180,7 +319,7 @@ export function WhatsAppDock({
               </div>
             </div>
 
-            {/* live status snapshot */}
+            {/* live status snapshot — same state the bank sees */}
             <div className="border-t bg-card px-3 py-2">
               <div className="grid grid-cols-4 gap-2 text-center">
                 <div>
@@ -243,16 +382,18 @@ export function WhatsAppDock({
       {/* launcher */}
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-label={open ? "Hide Customer WhatsApp" : "Open Customer WhatsApp"}
+        onClick={() => setView((v) => (v === "closed" ? "selector" : "closed"))}
+        aria-label={
+          view === "closed" ? "Open Customer View" : "Close Customer View"
+        }
         className="flex items-center gap-2 rounded-full bg-[#25d366] py-2.5 pr-4 pl-3 text-sm font-semibold text-white shadow-lg outline-none transition-transform hover:scale-[1.03] focus-visible:ring-2 focus-visible:ring-ring/60"
       >
-        {open ? (
-          <ChevronDown className="size-5" aria-hidden />
-        ) : (
+        {view === "closed" ? (
           <MessageCircle className="size-5" aria-hidden />
+        ) : (
+          <ChevronDown className="size-5" aria-hidden />
         )}
-        Customer WhatsApp
+        Customer View
       </button>
     </div>
   )

@@ -14,8 +14,14 @@ export function QueueBoard({ onSelectCustomer, onTransfer }: QueueBoardProps) {
   const now = useNow(1000)
 
   return (
-    <section aria-label="Counter queues" className="min-w-0">
-      <div className="grid auto-cols-[minmax(13rem,1fr)] grid-flow-col gap-3 overflow-x-auto pb-1 min-[1400px]:grid-flow-row min-[1400px]:grid-cols-5">
+    <section
+      aria-label="Live queues"
+      className="flex min-h-0 flex-1 flex-col gap-2"
+    >
+      <h2 className="shrink-0 px-0.5 text-sm font-semibold tracking-tight">
+        Live Queues
+      </h2>
+      <div className="grid min-h-0 flex-1 auto-cols-[minmax(13rem,1fr)] grid-flow-col gap-3 overflow-x-auto xl:grid-flow-row xl:grid-cols-5 xl:overflow-x-visible">
         {counters.map((counter) => (
           <CounterColumn
             key={counter.id}
