@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { Sparkles, TicketPlus, UserPlus } from "lucide-react"
-import { toast } from "sonner"
+import { notifyTransient } from "@/lib/notifications"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -43,7 +43,8 @@ export function NewCustomerCard() {
     const state = useQueueStore.getState().state
     const customer = state.customers[customerId]
     const queue = state.counters.find((c) => c.id === counter)?.queue ?? []
-    toast.success(`Token ${customer.token} issued`, {
+    notifyTransient(`Token ${customer.token} issued`, {
+      kind: "success",
       description: `${customer.name} joined Counter ${counter} at position #${queue.indexOf(customerId) + 1}`,
     })
   }
@@ -72,8 +73,8 @@ export function NewCustomerCard() {
       plannedRoute: [5, 3],
     })
     announce(customer.id, 1)
-    toast.info("Multi-counter journey planned", {
-      description: `${customer.token} will visit Counter 1 → 5 → 3`,
+    notifyTransient("Multi-counter journey planned", {
+      description: `${customer.token} will visit Counter 1 → 4 → 3`,
     })
   }
 

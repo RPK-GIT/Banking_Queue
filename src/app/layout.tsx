@@ -30,7 +30,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="flex min-h-full flex-col">
         <TooltipProvider delay={300}>{children}</TooltipProvider>
-        <Toaster position="bottom-right" richColors closeButton />
+        {/* single calm transient at a time — history lives in the Activity Center */}
+        <Toaster position="bottom-left" richColors closeButton visibleToasts={1} />
       </body>
     </html>
   );

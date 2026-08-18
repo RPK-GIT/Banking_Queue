@@ -8,7 +8,7 @@ and queue management system for bank branches.
 ## What it demonstrates
 
 In a traditional branch, a customer whose request spans several counters
-(e.g. Account Opening: Counter 1 → Counter 5 → Counter 3 → Counter 1)
+(e.g. Account Opening: Counter 1 → Counter 4 → Counter 3 → Counter 1)
 effectively *loses their place* every time they move, because no counter knows
 when their overall journey started. This causes arguments, queue jumping,
 perceived unfairness and employee stress.
@@ -23,12 +23,15 @@ Smart Bank Queue fixes this with one simple idea:
 The app is a **fixed single-screen branch operations workspace** (no page
 scrolling at desktop resolutions): a collapsible left control pane (reception
 + demonstration controls), a compact executive KPI strip, a full-height Live
-Queues board for all five counters (long queues collapse behind "+ N more
-waiting" and scroll inside their card), a Live Activity slide-over drawer, a
-per-token journey dialog with a full audit trail, and a floating **Customer
-View** (simulated WhatsApp) so the manager sees the bank view and the
-customer view side by side. A scripted **Live Demo** walks a manager through
-the whole concept in about a minute.
+Queues board for all four counters (long queues collapse behind "+ N more
+waiting" and scroll inside their card), a Live Activity center in the header
+(single calm transient notification at a time — history in the drawer), a
+per-token journey dialog with a full audit trail, a PERMANENT right-side
+**Customer View** (simulated WhatsApp) so the manager always sees the bank
+view and the customer view side by side, and a **Manager Dashboard**
+perspective with switchable visualizations (bar/donut/pie/table, remembered
+per chart). A scripted **Live Demo** walks a manager through the whole
+concept in about a minute.
 
 ## How to run
 
@@ -51,21 +54,23 @@ scenario, and persisted to `localStorage` so a refresh keeps the demo state.
 
 ## How to demonstrate it to a bank manager
 
-1. Open the app — it is pre-seeded with ~14 customers across 5 counters.
-2. Click the **T-101** card at Counter 3: Ravi Kumar's journey shows
-   Counter 1 ✓ → Counter 5 ✓ → Counter 3 ● → Counter 1 ○, with timestamps.
+1. Open the app — it is pre-seeded with ~14 customers across 4 counters, with
+   the permanent Customer View (simulated WhatsApp) on the right.
+2. Click the **T-104** card at Counter 3: Ravi Kumar's journey shows
+   Counter 1 ✓ → Counter 4 ✓ → Counter 3 ● → Counter 1 ○, with timestamps.
    *This is the core message: the token follows the customer.*
-3. Click **▶ Start Live Demo**. A scripted, narrated 20-step scenario runs: a
+3. Click **▶ Start Live Demo**. A scripted, narrated 21-step scenario runs: a
    new customer (T-115) gets a token, waits her turn at Counter 1, is
-   transferred to the **end** of Counter 5's queue, then Counter 3, and finally
-   completes — while T-101 finishes his 4-counter journey.
+   transferred to the **end** of Counter 4's queue, then Counter 3, and finally
+   completes — while hero customer T-104 (Ravi) finishes his 4-stop journey.
+   When the demo starts, the Customer View automatically focuses Ravi's phone.
 4. Click **⏸ Pause** at any point. Pause freezes the *simulation engine only* —
-   the dashboard stays fully interactive. Click **💬 Customer View**
-   (bottom-right), pick a customer to open their simulated WhatsApp phone,
-   switch phones, scroll conversations, compare with the Journey dialog (bank
-   view vs customer view), change speed (0.5× / 1× / 2× / 4×), or click
-   **⏭ Step** to run exactly one event at a time. **▶ Resume** continues from
-   the exact remaining time — no restarted, skipped or duplicated events.
+   the dashboard stays fully interactive. Switch customers in the right-side
+   Customer View, scroll conversations, compare with the Journey dialog (bank
+   view vs customer view), open the Manager Dashboard perspective, change
+   speed (0.5× / 1× / 2× / 4×), or click **⏭ Step** to run exactly one event
+   at a time. **▶ Resume** continues from the exact remaining time — no
+   restarted, skipped or duplicated events.
 5. Try it manually: **Issue Token**, then **Transfer** someone from a counter —
    the confirmation shows their new position at the end of the destination queue.
 
@@ -83,6 +88,11 @@ src/
                       # step/speed) — engine state is separate from UI state
     whatsapp.ts       # customer WhatsApp view DERIVED from queue state —
                       # frozen automatically while paused, duplicates impossible
+    analytics.ts      # manager metrics (workload, processing time, pressure)
+                      # derived live from the same canonical state
+    notifications.ts  # calm-notification policy: priority classes + a single
+                      # replaced transient toast (never stacks)
+    viz-prefs.ts      # per-chart visualization choice, persisted locally
     format.ts         # time/duration formatting
   hooks/use-now.ts    # 1s ticker for live clocks and wait times
   components/
@@ -91,7 +101,9 @@ src/
     app-header.tsx, kpi-strip.tsx, new-customer-card.tsx, demo-controls.tsx
     queue-board.tsx, counter-column.tsx, customer-card.tsx
     journey-dialog.tsx, transfer-dialog.tsx, activity-feed.tsx, why-panel.tsx
-    whatsapp-dock.tsx # floating simulated customer phone — always interactive
+    customer-view-panel.tsx # permanent right-side Customer View (WhatsApp)
+    manager-dashboard.tsx   # switchable analytics (bar/donut/pie/table)
+    charts.tsx              # hand-rolled chart kit, validated palette
     ui/               # shadcn/ui components (Base UI primitives)
 ```
 

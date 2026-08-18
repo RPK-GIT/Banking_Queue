@@ -131,7 +131,7 @@ describe("demo engine — pause freezes the simulation, not the app", () => {
       (c) => c.token === "T-115"
     )
     expect(aisha?.status).toBe("completed")
-    expect(aisha?.journey.map((s) => s.counterId)).toEqual([1, 5, 3])
+    expect(aisha?.journey.map((s) => s.counterId)).toEqual([1, 4, 3])
   })
 
   it("pause/step/resume cycles never duplicate or drop events", () => {
@@ -148,6 +148,33 @@ describe("demo engine — pause freezes the simulation, not the app", () => {
       a.message.startsWith("T-115 issued")
     )
     expect(issued).toHaveLength(1)
+  })
+
+  it("completes the hero's four-stop journey (C1 → C4 → C3 → C1)", () => {
+    store().playDemo()
+    vi.advanceTimersByTime(INITIAL_DELAY + DEMO_STEP_COUNT * STEP_DELAY)
+
+    const ravi = Object.values(store().state.customers).find(
+      (c) => c.token === "T-104"
+    )
+    expect(ravi?.status).toBe("completed")
+    expect(ravi?.journey.map((s) => s.counterId)).toEqual([1, 4, 3, 1])
+  })
+
+  it("pause prevents any new notifications from being generated", async () => {
+    const { toast } = await import("sonner")
+    store().playDemo()
+    vi.advanceTimersByTime(INITIAL_DELAY)
+    store().pauseDemo()
+
+    const calls = () =>
+      (toast.info as ReturnType<typeof vi.fn>).mock.calls.length +
+      (toast.success as ReturnType<typeof vi.fn>).mock.calls.length +
+      (toast.error as ReturnType<typeof vi.fn>).mock.calls.length
+
+    const before = calls()
+    vi.advanceTimersByTime(20 * STEP_DELAY)
+    expect(calls()).toBe(before) // frozen engine → zero new notifications
   })
 
   it("restart (play after completion) resets and replays cleanly", () => {
@@ -170,11 +197,11 @@ describe("demo engine — pause freezes the simulation, not the app", () => {
     expect(store().demoStatus).toBe("idle")
     expect(store().demoStepIndex).toBe(0)
     const tokens = Object.values(store().state.customers).map((c) => c.token)
-    expect(tokens).toContain("T-101")
+    expect(tokens).toContain("T-104")
     expect(tokens).not.toContain("T-115")
 
     vi.advanceTimersByTime(60_000)
-    expect(snapshot()).toContain("T-101") // nothing keeps running
+    expect(snapshot()).toContain("T-104") // nothing keeps running
     expect(store().demoStepIndex).toBe(0)
   })
 })

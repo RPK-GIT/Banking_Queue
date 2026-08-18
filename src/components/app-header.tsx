@@ -1,6 +1,6 @@
 "use client"
 
-import { Activity, Building2, Info, Landmark, Pause } from "lucide-react"
+import { Bell, Building2, Info, Landmark, Pause } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -54,12 +54,14 @@ function DemoStatusChip() {
 
 interface AppHeaderProps {
   activityOpen: boolean
+  unreadCount: number
   onToggleActivity: () => void
   onOpenWhy: () => void
 }
 
 export function AppHeader({
   activityOpen,
+  unreadCount,
   onToggleActivity,
   onOpenWhy,
 }: AppHeaderProps) {
@@ -108,16 +110,23 @@ export function AppHeader({
             render={
               <Button
                 variant={activityOpen ? "secondary" : "ghost"}
-                size="icon-sm"
-                aria-label="Toggle live activity panel"
+                size="sm"
+                aria-label={`Toggle live activity panel — ${unreadCount} recent events`}
                 aria-pressed={activityOpen}
                 onClick={onToggleActivity}
+                className="gap-1.5"
               />
             }
           >
-            <Activity aria-hidden />
+            <Bell aria-hidden />
+            <span className="hidden text-xs md:inline">Activity</span>
+            {unreadCount > 0 && (
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold tabular-nums text-primary-foreground">
+                {unreadCount > 99 ? "99+" : unreadCount}
+              </span>
+            )}
           </TooltipTrigger>
-          <TooltipContent>Live activity</TooltipContent>
+          <TooltipContent>Live activity ({unreadCount} recent)</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger

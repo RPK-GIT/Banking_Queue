@@ -21,7 +21,7 @@ export function QueueBoard({ onSelectCustomer, onTransfer }: QueueBoardProps) {
       <h2 className="shrink-0 px-0.5 text-sm font-semibold tracking-tight">
         Live Queues
       </h2>
-      <div className="grid min-h-0 flex-1 auto-cols-[minmax(13rem,1fr)] grid-flow-col gap-3 overflow-x-auto xl:grid-flow-row xl:grid-cols-5 xl:overflow-x-visible">
+      <div className="grid min-h-0 flex-1 auto-cols-[minmax(13rem,1fr)] grid-flow-col gap-3 overflow-x-auto lg:grid-flow-row lg:grid-cols-4 lg:overflow-x-visible">
         {counters.map((counter) => (
           <CounterColumn
             key={counter.id}

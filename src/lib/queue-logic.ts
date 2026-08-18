@@ -12,10 +12,9 @@ export const COUNTER_DEFS: ReadonlyArray<{
   employeeName: string
 }> = [
   { id: 1, name: "General Banking", employeeName: "Priya" },
-  { id: 2, name: "Cash", employeeName: "Arjun" },
+  { id: 2, name: "Cash Services", employeeName: "Arjun" },
   { id: 3, name: "Account Services", employeeName: "Kavita" },
-  { id: 4, name: "Loans", employeeName: "Vikram" },
-  { id: 5, name: "Customer Service", employeeName: "Deepa" },
+  { id: 4, name: "Customer Service", employeeName: "Deepa" },
 ]
 
 export function counterLabel(counterId: number): string {

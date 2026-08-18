@@ -10,7 +10,7 @@ import {
   ChevronDown,
   UserRound,
 } from "lucide-react"
-import { toast } from "sonner"
+import { notifyTransient } from "@/lib/notifications"
 
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -60,7 +60,7 @@ export function CounterColumn({
   function handleCallNext() {
     const called = callNext(counter.id)
     if (called) {
-      toast.info(`${called.token} called at Counter ${counter.id}`, {
+      notifyTransient(`${called.token} called at Counter ${counter.id}`, {
         description: `${called.name} — ${called.serviceType}`,
       })
     }
@@ -69,7 +69,8 @@ export function CounterColumn({
   function handleComplete() {
     if (!serving) return
     const completed = completeService(counter.id)
-    toast.success(`${completed.token} journey completed`, {
+    notifyTransient(`${completed.token} journey completed`, {
+      kind: "success",
       description: `${completed.name} served across ${completed.journey.length} counter${completed.journey.length > 1 ? "s" : ""}.`,
     })
   }

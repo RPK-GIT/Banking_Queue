@@ -2,17 +2,26 @@
 
 import { useEffect, useState } from "react"
 import { AnimatePresence, motion } from "motion/react"
-import { Pause, PanelLeftOpen, Play, UserPlus, X } from "lucide-react"
+import {
+  ChartColumn,
+  LayoutGrid,
+  Pause,
+  PanelLeftOpen,
+  Play,
+  UserPlus,
+  X,
+} from "lucide-react"
 
 import { ActivityFeed } from "@/components/activity-feed"
 import { AppHeader } from "@/components/app-header"
+import { CustomerViewPanel } from "@/components/customer-view-panel"
 import { DemoControls } from "@/components/demo-controls"
 import { JourneyDialog } from "@/components/journey-dialog"
 import { KpiStrip } from "@/components/kpi-strip"
+import { ManagerDashboard } from "@/components/manager-dashboard"
 import { NewCustomerCard } from "@/components/new-customer-card"
 import { QueueBoard } from "@/components/queue-board"
 import { TransferDialog } from "@/components/transfer-dialog"
-import { WhatsAppDock } from "@/components/whatsapp-dock"
 import { WhyDialog } from "@/components/why-panel"
 import { Button } from "@/components/ui/button"
 import {
@@ -23,8 +32,16 @@ import {
 import { useQueueStore } from "@/lib/queue-store"
 import { cn } from "@/lib/utils"
 
+type CenterView = "operations" | "manager"
+
 /** Collapsed left pane — a compact vertical toolbar; nothing is destroyed. */
-function CollapsedRail({ onExpand }: { onExpand: () => void }) {
+function CollapsedRail({
+  onExpand,
+  onShowManager,
+}: {
+  onExpand: () => void
+  onShowManager: () => void
+}) {
   const demoStatus = useQueueStore((s) => s.demoStatus)
   const playDemo = useQueueStore((s) => s.playDemo)
   const pauseDemo = useQueueStore((s) => s.pauseDemo)
@@ -85,6 +102,21 @@ function CollapsedRail({ onExpand }: { onExpand: () => void }) {
           {demoStatus === "playing" ? "Pause demo" : "Demo"}
         </TooltipContent>
       </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Manager Dashboard"
+              onClick={onShowManager}
+            />
+          }
+        >
+          <ChartColumn aria-hidden />
+        </TooltipTrigger>
+        <TooltipContent side="right">Manager Dashboard</TooltipContent>
+      </Tooltip>
       {demoStatus !== "idle" && (
         <span
           aria-hidden
@@ -98,12 +130,55 @@ function CollapsedRail({ onExpand }: { onExpand: () => void }) {
   )
 }
 
+/** Operations ↔ Manager Dashboard switcher (same shell, no navigation). */
+function PerspectiveSwitch({
+  view,
+  onChange,
+}: {
+  view: CenterView
+  onChange: (view: CenterView) => void
+}) {
+  return (
+    <section aria-label="Perspective" className="flex flex-col gap-1.5">
+      <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+        Perspective
+      </p>
+      <div className="grid grid-cols-1 gap-1.5">
+        <Button
+          variant={view === "operations" ? "secondary" : "ghost"}
+          size="sm"
+          aria-pressed={view === "operations"}
+          className="justify-start"
+          onClick={() => onChange("operations")}
+        >
+          <LayoutGrid data-icon="inline-start" aria-hidden />
+          Operations
+        </Button>
+        <Button
+          variant={view === "manager" ? "secondary" : "ghost"}
+          size="sm"
+          aria-pressed={view === "manager"}
+          className="justify-start"
+          onClick={() => onChange("manager")}
+        >
+          <ChartColumn data-icon="inline-start" aria-hidden />
+          Manager Dashboard
+        </Button>
+      </div>
+    </section>
+  )
+}
+
 export function Dashboard() {
   const hydrated = useQueueStore((s) => s.hydrated)
   const init = useQueueStore((s) => s.init)
   const demoStatus = useQueueStore((s) => s.demoStatus)
+  const activities = useQueueStore((s) => s.state.activities)
+  const [view, setView] = useState<CenterView>("operations")
   const [collapsed, setCollapsed] = useState(false)
+  const [customerViewCollapsed, setCustomerViewCollapsed] = useState(false)
   const [activityOpen, setActivityOpen] = useState(false)
+  const [lastSeenActivityId, setLastSeenActivityId] = useState<string | null>(null)
   const [whyOpen, setWhyOpen] = useState(false)
   const [journeyCustomerId, setJourneyCustomerId] = useState<string | null>(null)
   const [transferCustomerId, setTransferCustomerId] = useState<string | null>(null)
@@ -112,11 +187,25 @@ export function Dashboard() {
     init()
   }, [init])
 
+  // unread = events newer than the last one seen when the drawer was opened
+  const seenIndex = lastSeenActivityId
+    ? activities.findIndex((a) => a.id === lastSeenActivityId)
+    : activities.length
+  const unreadCount = seenIndex === -1 ? activities.length : seenIndex
+
+  function toggleActivity() {
+    setActivityOpen((open) => {
+      if (!open) setLastSeenActivityId(activities[0]?.id ?? null)
+      return !open
+    })
+  }
+
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       <AppHeader
         activityOpen={activityOpen}
-        onToggleActivity={() => setActivityOpen((o) => !o)}
+        unreadCount={unreadCount}
+        onToggleActivity={toggleActivity}
         onOpenWhy={() => setWhyOpen(true)}
       />
 
@@ -126,13 +215,18 @@ export function Dashboard() {
           aria-label="Control pane"
           className={cn(
             "relative z-30 flex shrink-0 flex-col border-r bg-card transition-[width] duration-200 ease-out",
-            collapsed ? "w-14" : "w-[300px]"
+            collapsed ? "w-14" : "w-[290px]"
           )}
         >
           {collapsed ? (
-            <CollapsedRail onExpand={() => setCollapsed(false)} />
+            <CollapsedRail
+              onExpand={() => setCollapsed(false)}
+              onShowManager={() => setView("manager")}
+            />
           ) : (
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-3">
+              <PerspectiveSwitch view={view} onChange={setView} />
+              <div className="h-px shrink-0 bg-border" />
               <NewCustomerCard />
               <div className="h-px shrink-0 bg-border" />
               <DemoControls />
@@ -152,23 +246,36 @@ export function Dashboard() {
           </button>
         </aside>
 
-        {/* MAIN WORKSPACE — KPI strip + live queue board, no page scroll */}
+        {/* CENTER — MAIN OPERATIONS (or Manager Dashboard), no page scroll */}
         <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3">
           {hydrated ? (
-            <>
-              <KpiStrip />
-              <QueueBoard
-                onSelectCustomer={setJourneyCustomerId}
-                onTransfer={setTransferCustomerId}
-              />
-            </>
+            view === "operations" ? (
+              <>
+                <KpiStrip />
+                <QueueBoard
+                  onSelectCustomer={setJourneyCustomerId}
+                  onTransfer={setTransferCustomerId}
+                />
+              </>
+            ) : (
+              <ManagerDashboard />
+            )
           ) : (
             <>
-              <div className="h-[72px] shrink-0 animate-pulse rounded-xl bg-muted" />
+              <div className="h-[64px] shrink-0 animate-pulse rounded-xl bg-muted" />
               <div className="min-h-0 flex-1 animate-pulse rounded-xl bg-muted" />
             </>
           )}
         </main>
+
+        {/* RIGHT — permanent Customer View */}
+        {hydrated && (
+          <CustomerViewPanel
+            collapsed={customerViewCollapsed}
+            onToggleCollapsed={() => setCustomerViewCollapsed((c) => !c)}
+            onOpenJourney={setJourneyCustomerId}
+          />
+        )}
       </div>
 
       {/* LIVE ACTIVITY — slide-over drawer, non-blocking */}
@@ -189,7 +296,7 @@ export function Dashboard() {
                 variant="ghost"
                 size="icon-sm"
                 aria-label="Close activity panel"
-                onClick={() => setActivityOpen(false)}
+                onClick={toggleActivity}
               >
                 <X aria-hidden />
               </Button>
@@ -210,8 +317,6 @@ export function Dashboard() {
           </span>
         </div>
       )}
-
-      <WhatsAppDock onOpenJourney={setJourneyCustomerId} />
 
       <WhyDialog open={whyOpen} onClose={() => setWhyOpen(false)} />
       <JourneyDialog

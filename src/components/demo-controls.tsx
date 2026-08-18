@@ -8,7 +8,7 @@ import {
   SkipForward,
   Trash2,
 } from "lucide-react"
-import { toast } from "sonner"
+import { notifyTransient } from "@/lib/notifications"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -126,7 +126,7 @@ export function DemoControls() {
           size="sm"
           onClick={() => {
             resetDemo()
-            toast.info("Demo restarted", {
+            notifyTransient("Demo restarted", {
               description: "Branch restored to the seeded scenario.",
             })
           }}
@@ -139,7 +139,7 @@ export function DemoControls() {
           size="sm"
           onClick={() => {
             clearAll()
-            toast.info("Branch cleared", {
+            notifyTransient("Branch cleared", {
               description: "All queues are now empty.",
             })
           }}

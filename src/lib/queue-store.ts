@@ -1,8 +1,8 @@
 "use client"
 
 import { create } from "zustand"
-import { toast } from "sonner"
 
+import { notifyTransient } from "./notifications"
 import {
   callNextCustomer,
   completeCurrentService,
@@ -87,7 +87,7 @@ const DEMO_STEPS: DemoStep[] = [
         name: "Aisha Khan",
         serviceType: "Account Opening",
         counterId: 1,
-        plannedRoute: [5, 3],
+        plannedRoute: [4, 3],
       }),
   },
   {
@@ -107,39 +107,43 @@ const DEMO_STEPS: DemoStep[] = [
     run: (s) => void s.callNext(1),
   },
   {
-    note: `Counter 1 finishes its part and transfers ${DEMO_TOKEN} to Counter 5 — she joins the END of that queue.`,
-    run: (s) => void s.transfer(byToken(s.state, DEMO_TOKEN).id, 5),
+    note: `Counter 1 finishes its part and transfers ${DEMO_TOKEN} to Counter 4 — she joins the END of that queue. Watch her WhatsApp update.`,
+    run: (s) => void s.transfer(byToken(s.state, DEMO_TOKEN).id, 4),
   },
   {
-    note: "Counter 5 finishes its current customer.",
-    run: (s) => void s.completeService(5),
+    note: "Counter 4 calls its first waiting customer — strict FIFO.",
+    run: (s) => void s.callNext(4),
   },
   {
-    note: "Counter 5 calls the next customer — those already waiting keep their priority.",
-    run: (s) => void s.callNext(5),
+    note: "Counter 4 finishes serving.",
+    run: (s) => void s.completeService(4),
   },
   {
-    note: "Counter 5 finishes serving.",
-    run: (s) => void s.completeService(5),
+    note: "Counter 4 calls the next customer — those already waiting keep their priority.",
+    run: (s) => void s.callNext(4),
   },
   {
-    note: `${DEMO_TOKEN} reaches the front — Counter 5 calls Aisha.`,
-    run: (s) => void s.callNext(5),
+    note: "Counter 4 finishes serving.",
+    run: (s) => void s.completeService(4),
   },
   {
-    note: `Counter 5 transfers ${DEMO_TOKEN} to Counter 3 — same token, full journey preserved.`,
+    note: `${DEMO_TOKEN} reaches the front — Counter 4 calls Aisha.`,
+    run: (s) => void s.callNext(4),
+  },
+  {
+    note: `Counter 4 transfers ${DEMO_TOKEN} to Counter 3 — same token, full journey preserved.`,
     run: (s) => void s.transfer(byToken(s.state, DEMO_TOKEN).id, 3),
   },
   {
-    note: "Ravi (T-101) is transferred back to Counter 1 — his 4th counter, one continuous journey.",
-    run: (s) => void s.transfer(byToken(s.state, "T-101").id, 1),
+    note: "Ravi (T-104) is transferred back to Counter 1 — his 4th stop, one continuous journey.",
+    run: (s) => void s.transfer(byToken(s.state, "T-104").id, 1),
   },
   {
-    note: "Counter 1 calls T-101 — the system still knows he arrived first.",
+    note: "Counter 1 calls T-104 — the system still knows he arrived first.",
     run: (s) => void s.callNext(1),
   },
   {
-    note: "T-101's journey completes after 4 counters — fully traceable end to end.",
+    note: "T-104's journey completes after 4 stops — fully traceable end to end.",
     run: (s) => void s.completeService(1),
   },
   {
@@ -211,7 +215,8 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     const step = DEMO_STEPS[index]
     if (!step) {
       set({ demoStatus: "idle" })
-      toast.success("Demo finished", {
+      notifyTransient("Demo finished", {
+        kind: "success",
         description: "Every customer was served in fair FIFO order.",
       })
       return false
@@ -220,19 +225,22 @@ export const useQueueStore = create<QueueStore>((set, get) => {
       step.run(store)
     } catch {
       set({ demoStatus: "idle" })
-      toast.error("Demo stopped", {
-        description: "The branch state changed — press Reset, then Play Demo.",
+      notifyTransient("Demo stopped", {
+        kind: "error",
+        description: "The branch state changed — press Restart, then Play Demo.",
       })
       return false
     }
     set({ demoStepIndex: index + 1 })
-    toast.info(`Step ${index + 1} of ${DEMO_STEPS.length}`, {
+    // one calm transient at a time — each step REPLACES the previous note
+    notifyTransient(`Step ${index + 1} of ${DEMO_STEPS.length}`, {
       description: step.note,
-      duration: Math.max(1500, BASE_STEP_DELAY_MS / get().demoSpeed),
+      durationMs: Math.max(1500, Math.min(BASE_STEP_DELAY_MS / get().demoSpeed, 3000)),
     })
     if (index + 1 >= DEMO_STEPS.length) {
       set({ demoStatus: "idle" })
-      toast.success("Demo finished", {
+      notifyTransient("Demo finished", {
+        kind: "success",
         description: "Every customer was served in fair FIFO order.",
       })
       return false
@@ -261,7 +269,7 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     saveToStorage(state)
     set({ state, demoStatus: "playing", demoStepIndex: 0 })
     baseRemainingMs = INITIAL_DELAY_MS
-    toast.info("Demo started", {
+    notifyTransient("Demo started", {
       description: "Watch one token travel across multiple counters.",
     })
     scheduleNext()

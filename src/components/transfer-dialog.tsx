@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { ArrowRight, ArrowRightLeft } from "lucide-react"
-import { toast } from "sonner"
+import { notifyTransient } from "@/lib/notifications"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -38,7 +38,8 @@ export function TransferDialog({ customerId, onClose }: TransferDialogProps) {
   function handleTransfer() {
     if (!customer || destination === null) return
     const result = transfer(customer.id, destination)
-    toast.success(`${customer.token} transferred`, {
+    notifyTransient(`${customer.token} transferred`, {
+      kind: "success",
       description: `Added to Counter ${destination} queue at position #${result.position}`,
     })
     close()

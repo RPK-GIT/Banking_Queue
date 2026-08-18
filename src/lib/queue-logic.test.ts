@@ -98,12 +98,12 @@ describe("transfers (Rules 4, 2, 8, 10)", () => {
   it("appends the transferred customer to the END of the destination queue", () => {
     const state = emptyState()
     const traveller = servingCustomerAtCounter1(state)
-    const existingA = issue(state, "Existing A", 5, T0 + 1)
-    const existingB = issue(state, "Existing B", 5, T0 + 2)
+    const existingA = issue(state, "Existing A", 4, T0 + 1)
+    const existingB = issue(state, "Existing B", 4, T0 + 2)
 
-    const result = transferCustomer(state, traveller.id, 5, T0 + 10)
+    const result = transferCustomer(state, traveller.id, 4, T0 + 10)
 
-    expect(state.counters[4].queue).toEqual([
+    expect(state.counters[3].queue).toEqual([
       existingA.id,
       existingB.id,
       traveller.id,
@@ -115,10 +115,10 @@ describe("transfers (Rules 4, 2, 8, 10)", () => {
   it("keeps the priority of customers already in the destination queue", () => {
     const state = emptyState()
     const traveller = servingCustomerAtCounter1(state)
-    const existing = issue(state, "Existing", 5, T0 + 1)
+    const existing = issue(state, "Existing", 4, T0 + 1)
 
-    transferCustomer(state, traveller.id, 5, T0 + 10)
-    const called = callNextCustomer(state, 5, T0 + 20)
+    transferCustomer(state, traveller.id, 4, T0 + 10)
+    const called = callNextCustomer(state, 4, T0 + 20)
 
     expect(called?.id).toBe(existing.id)
     expect(queuePosition(state, traveller.id)).toBe(1)
@@ -129,12 +129,12 @@ describe("transfers (Rules 4, 2, 8, 10)", () => {
     const traveller = servingCustomerAtCounter1(state)
     const token = traveller.token
 
-    transferCustomer(state, traveller.id, 5, T0 + 10)
-    callNextCustomer(state, 5, T0 + 20)
+    transferCustomer(state, traveller.id, 4, T0 + 10)
+    callNextCustomer(state, 4, T0 + 20)
     transferCustomer(state, traveller.id, 3, T0 + 30)
 
     expect(traveller.token).toBe(token)
-    expect(traveller.journey.map((s) => s.counterId)).toEqual([1, 5, 3])
+    expect(traveller.journey.map((s) => s.counterId)).toEqual([1, 4, 3])
     expect(traveller.journey[0].status).toBe("completed")
     expect(traveller.journey[1].status).toBe("completed")
     expect(traveller.journey[2].status).toBe("waiting")
@@ -159,7 +159,7 @@ describe("journey completion (Rules 5 & 6)", () => {
     const traveller = issue(state, "Traveller", 1)
     callNextCustomer(state, 1, T0 + 5)
 
-    transferCustomer(state, traveller.id, 5, T0 + 10)
+    transferCustomer(state, traveller.id, 4, T0 + 10)
 
     expect(traveller.status).toBe("waiting")
     expect(traveller.completedAt).toBeNull()
@@ -170,16 +170,46 @@ describe("journey completion (Rules 5 & 6)", () => {
     const state = emptyState()
     const traveller = issue(state, "Traveller", 1)
     callNextCustomer(state, 1, T0 + 5)
-    transferCustomer(state, traveller.id, 5, T0 + 10)
-    callNextCustomer(state, 5, T0 + 20)
+    transferCustomer(state, traveller.id, 4, T0 + 10)
+    callNextCustomer(state, 4, T0 + 20)
 
-    const completed = completeCurrentService(state, 5, T0 + 30)
+    const completed = completeCurrentService(state, 4, T0 + 30)
 
     expect(completed.status).toBe("completed")
     expect(completed.completedAt).toBe(T0 + 30)
     expect(completed.currentCounterId).toBeNull()
-    expect(state.counters[4].currentCustomerId).toBeNull()
+    expect(state.counters[3].currentCustomerId).toBeNull()
     expect(completed.journey.every((s) => s.status === "completed")).toBe(true)
+  })
+})
+
+describe("branch layout (4 counters)", () => {
+  it("initializes exactly four counters with no Counter 5", () => {
+    const state = emptyState()
+    expect(state.counters).toHaveLength(4)
+    expect(state.counters.map((c) => c.id)).toEqual([1, 2, 3, 4])
+    expect(state.counters.map((c) => c.name)).toEqual([
+      "General Banking",
+      "Cash Services",
+      "Account Services",
+      "Customer Service",
+    ])
+    expect(state.counters.some((c) => c.id === 5)).toBe(false)
+  })
+
+  it("seeded scenario never references a fifth counter", () => {
+    const state = seedState(Date.now())
+    expect(state.counters).toHaveLength(4)
+    for (const customer of Object.values(state.customers)) {
+      for (const step of customer.journey) {
+        expect(step.counterId).toBeGreaterThanOrEqual(1)
+        expect(step.counterId).toBeLessThanOrEqual(4)
+      }
+      for (const planned of customer.plannedRoute) {
+        expect(planned).toBeGreaterThanOrEqual(1)
+        expect(planned).toBeLessThanOrEqual(4)
+      }
+    }
   })
 })
 
@@ -191,9 +221,11 @@ describe("reset (demo scenario)", () => {
     const customers = Object.values(state.customers)
     expect(customers.length).toBeGreaterThanOrEqual(8)
 
-    // the complex multi-counter journey exists
-    const ravi = customers.find((c) => c.token === "T-101")
-    expect(ravi?.journey.map((s) => s.counterId)).toEqual([1, 5, 3])
+    // the hero's complex multi-counter journey exists: C1 → C4 → C3 (→ C1)
+    const ravi = customers.find((c) => c.token === "T-104")
+    expect(ravi?.name).toBe("Ravi Kumar")
+    expect(ravi?.journey.map((s) => s.counterId)).toEqual([1, 4, 3])
+    expect(ravi?.plannedRoute).toEqual([1])
     expect(ravi?.status).toBe("serving")
 
     // every waiting customer sits in exactly one queue
