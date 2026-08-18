@@ -50,11 +50,18 @@ scenario, and persisted to `localStorage` so a refresh keeps the demo state.
 2. Click the **T-101** card at Counter 3: Ravi Kumar's journey shows
    Counter 1 ✓ → Counter 5 ✓ → Counter 3 ● → Counter 1 ○, with timestamps.
    *This is the core message: the token follows the customer.*
-3. Click **▶ Play Demo**. A scripted, narrated 20-step scenario runs: a new
-   customer (T-115) gets a token, waits her turn at Counter 1, is transferred
-   to the **end** of Counter 5's queue, then Counter 3, and finally completes —
-   while T-101 finishes his 4-counter journey. Use **Pause** / **Reset** freely.
-4. Try it manually: **Issue Token**, then **Transfer** someone from a counter —
+3. Click **▶ Start Live Demo**. A scripted, narrated 20-step scenario runs: a
+   new customer (T-115) gets a token, waits her turn at Counter 1, is
+   transferred to the **end** of Counter 5's queue, then Counter 3, and finally
+   completes — while T-101 finishes his 4-counter journey.
+4. Click **⏸ Pause** at any point. Pause freezes the *simulation engine only* —
+   the dashboard stays fully interactive. Open the floating **Customer
+   WhatsApp** dock, switch between customers' phones, scroll their
+   conversations, compare with the Journey dialog (bank view vs customer view),
+   change speed (0.5× / 1× / 2× / 4×), or click **⏭ Step** to run exactly one
+   event at a time. **▶ Resume** continues from the exact remaining time — no
+   restarted, skipped or duplicated events.
+5. Try it manually: **Issue Token**, then **Transfer** someone from a counter —
    the confirmation shows their new position at the end of the destination queue.
 
 ## Architecture
@@ -67,7 +74,10 @@ src/
                       # completeCurrentService, transferCustomer, queuePosition
     seed.ts           # demo scenario, built by REPLAYING real operations
     queue-store.ts    # Zustand store: wraps the pure logic, adds persistence
-                      # (localStorage) and the scripted demo player
+                      # (localStorage) and the demo ENGINE (play/pause/resume/
+                      # step/speed) — engine state is separate from UI state
+    whatsapp.ts       # customer WhatsApp view DERIVED from queue state —
+                      # frozen automatically while paused, duplicates impossible
     format.ts         # time/duration formatting
   hooks/use-now.ts    # 1s ticker for live clocks and wait times
   components/
@@ -75,6 +85,7 @@ src/
     app-header.tsx, kpi-strip.tsx, new-customer-card.tsx, demo-controls.tsx
     queue-board.tsx, counter-column.tsx, customer-card.tsx
     journey-dialog.tsx, transfer-dialog.tsx, activity-feed.tsx, why-panel.tsx
+    whatsapp-dock.tsx # floating simulated customer phone — always interactive
     ui/               # shadcn/ui components (Base UI primitives)
 ```
 
@@ -115,3 +126,18 @@ first, first served before second, transfer appended to destination end,
 destination priority retained, journey preservation across counters,
 per-counter completion not completing the journey, final completion, and
 deterministic seeded reset.
+
+`src/lib/demo-engine.test.ts` covers the pause semantics with fake timers:
+pause stops the timer and all automated events, manual interactions still work
+while paused, resume continues from the exact remaining time, speed changes
+while paused apply only on resume, Step runs exactly one event and stays
+paused, full runs produce no duplicate events, and replay/reset behave.
+
+`src/lib/whatsapp.test.ts` covers the derived customer view: full conversation
+for a multi-counter journey, completion message, purity (identical state →
+identical messages, so nothing changes or duplicates while paused), and
+queue/position/estimated-wait snapshots.
+
+`scripts/pause-validation.mjs` drives the full presenter workflow in a real
+browser: start → pause → inspect WhatsApp → switch customers → journey dialog
+→ speed change → step → resume → completion, asserting zero console errors.

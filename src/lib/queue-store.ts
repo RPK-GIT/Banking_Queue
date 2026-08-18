@@ -17,12 +17,19 @@ import type { Customer, QueueState } from "./types"
 
 const STORAGE_KEY = "smart-bank-queue-v1"
 
-type DemoStatus = "idle" | "playing" | "paused"
+export type DemoStatus = "idle" | "playing" | "paused"
+export type DemoSpeed = 0.5 | 1 | 2 | 4
+export const DEMO_SPEEDS: DemoSpeed[] = [0.5, 1, 2, 4]
 
 interface QueueStore {
+  /** application/business state — what the branch looks like */
   state: QueueState
   hydrated: boolean
+  /** demo ENGINE state — independent from UI state (dialogs, WhatsApp, …) */
   demoStatus: DemoStatus
+  demoSpeed: DemoSpeed
+  /** number of scripted steps already executed (0-based next step index) */
+  demoStepIndex: number
   init: () => void
   issue: (input: IssueTokenInput) => Customer
   callNext: (counterId: number) => Customer | null
@@ -32,6 +39,8 @@ interface QueueStore {
   clearAll: () => void
   playDemo: () => void
   pauseDemo: () => void
+  stepDemo: () => void
+  setDemoSpeed: (speed: DemoSpeed) => void
 }
 
 function loadFromStorage(): QueueState | null {
@@ -150,16 +159,36 @@ const DEMO_STEPS: DemoStep[] = [
   },
 ]
 
-const DEMO_STEP_DELAY_MS = 3200
+export const DEMO_STEP_COUNT = DEMO_STEPS.length
 
+/** base (1×) delay between scripted events, in ms */
+const BASE_STEP_DELAY_MS = 3200
+const INITIAL_DELAY_MS = 600
+
+/**
+ * Demo engine timer bookkeeping (module-level — never touches React/UI state).
+ * `baseRemainingMs` is tracked in 1×-speed units so speed changes rescale
+ * cleanly and pause/resume continues from the exact remaining time.
+ */
 let demoTimer: ReturnType<typeof setTimeout> | null = null
-let demoStepIndex = 0
+let baseRemainingMs = 0
+let runningSince = 0 // Date.now() when the current timer was scheduled
+let runningSpeed: DemoSpeed = 1
 
-function stopDemoTimer(): void {
+function clearDemoTimer(): void {
   if (demoTimer) {
     clearTimeout(demoTimer)
     demoTimer = null
   }
+}
+
+/** Convert elapsed wall-clock time into consumed base-time and stop the timer. */
+function captureRemaining(): void {
+  if (demoTimer) {
+    const elapsedBase = (Date.now() - runningSince) * runningSpeed
+    baseRemainingMs = Math.max(0, baseRemainingMs - elapsedBase)
+  }
+  clearDemoTimer()
 }
 
 export const useQueueStore = create<QueueStore>((set, get) => {
@@ -172,41 +201,78 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     return result
   }
 
-  function scheduleDemoStep(): void {
-    stopDemoTimer()
+  /**
+   * Execute exactly one scripted event. Returns false when the script is
+   * exhausted (and marks the demo finished).
+   */
+  function runOneStep(): boolean {
+    const store = get()
+    const index = store.demoStepIndex
+    const step = DEMO_STEPS[index]
+    if (!step) {
+      set({ demoStatus: "idle" })
+      toast.success("Demo finished", {
+        description: "Every customer was served in fair FIFO order.",
+      })
+      return false
+    }
+    try {
+      step.run(store)
+    } catch {
+      set({ demoStatus: "idle" })
+      toast.error("Demo stopped", {
+        description: "The branch state changed — press Reset, then Play Demo.",
+      })
+      return false
+    }
+    set({ demoStepIndex: index + 1 })
+    toast.info(`Step ${index + 1} of ${DEMO_STEPS.length}`, {
+      description: step.note,
+      duration: Math.max(1500, BASE_STEP_DELAY_MS / get().demoSpeed),
+    })
+    if (index + 1 >= DEMO_STEPS.length) {
+      set({ demoStatus: "idle" })
+      toast.success("Demo finished", {
+        description: "Every customer was served in fair FIFO order.",
+      })
+      return false
+    }
+    return true
+  }
+
+  /** Schedule the next event after the remaining base-time at current speed. */
+  function scheduleNext(): void {
+    clearDemoTimer()
+    runningSpeed = get().demoSpeed
+    runningSince = Date.now()
     demoTimer = setTimeout(() => {
-      const store = get()
-      if (store.demoStatus !== "playing") return
-      const step = DEMO_STEPS[demoStepIndex]
-      if (!step) {
-        set({ demoStatus: "idle" })
-        toast.success("Demo finished", {
-          description: "Every customer was served in fair FIFO order.",
-        })
-        return
+      demoTimer = null
+      if (get().demoStatus !== "playing") return
+      if (runOneStep()) {
+        baseRemainingMs = BASE_STEP_DELAY_MS
+        scheduleNext()
       }
-      try {
-        step.run(store)
-        toast.info(`Step ${demoStepIndex + 1} of ${DEMO_STEPS.length}`, {
-          description: step.note,
-          duration: DEMO_STEP_DELAY_MS,
-        })
-      } catch {
-        set({ demoStatus: "idle" })
-        toast.error("Demo stopped", {
-          description: "The branch state changed — press Reset, then Play Demo.",
-        })
-        return
-      }
-      demoStepIndex += 1
-      scheduleDemoStep()
-    }, demoStepIndex === 0 ? 600 : DEMO_STEP_DELAY_MS)
+    }, baseRemainingMs / runningSpeed)
+  }
+
+  function startFresh(): void {
+    clearDemoTimer()
+    const state = seedState(Date.now())
+    saveToStorage(state)
+    set({ state, demoStatus: "playing", demoStepIndex: 0 })
+    baseRemainingMs = INITIAL_DELAY_MS
+    toast.info("Demo started", {
+      description: "Watch one token travel across multiple counters.",
+    })
+    scheduleNext()
   }
 
   return {
     state: emptyState(),
     hydrated: false,
     demoStatus: "idle",
+    demoSpeed: 1,
+    demoStepIndex: 0,
 
     init: () => {
       if (get().hydrated) return
@@ -230,45 +296,68 @@ export const useQueueStore = create<QueueStore>((set, get) => {
       ),
 
     resetDemo: () => {
-      stopDemoTimer()
-      demoStepIndex = 0
+      clearDemoTimer()
       const state = seedState(Date.now())
       saveToStorage(state)
-      set({ state, demoStatus: "idle" })
+      set({ state, demoStatus: "idle", demoStepIndex: 0 })
     },
 
     clearAll: () => {
-      stopDemoTimer()
-      demoStepIndex = 0
+      clearDemoTimer()
       const state = emptyState()
       saveToStorage(state)
-      set({ state, demoStatus: "idle" })
+      set({ state, demoStatus: "idle", demoStepIndex: 0 })
     },
 
     playDemo: () => {
       const { demoStatus } = get()
       if (demoStatus === "playing") return
       if (demoStatus === "paused") {
+        // resume from the exact remaining time — never restart or skip a step
         set({ demoStatus: "playing" })
-        scheduleDemoStep()
+        scheduleNext()
         return
       }
-      // start fresh from the seeded scenario so the script is deterministic
-      stopDemoTimer()
-      demoStepIndex = 0
-      const state = seedState(Date.now())
-      saveToStorage(state)
-      set({ state, demoStatus: "playing" })
-      toast.info("Demo started", {
-        description: "Watch one token travel across multiple counters.",
-      })
-      scheduleDemoStep()
+      startFresh()
     },
 
     pauseDemo: () => {
       if (get().demoStatus !== "playing") return
-      stopDemoTimer()
+      // freeze the ENGINE only — business state and UI stay fully interactive
+      captureRemaining()
       set({ demoStatus: "paused" })
+    },
+
+    stepDemo: () => {
+      const { demoStatus, demoStepIndex } = get()
+      if (demoStatus === "playing") return
+      if (demoStatus === "idle") {
+        if (demoStepIndex > 0) return // finished script — Reset to run again
+        // start a fresh scripted demo directly in inspect (paused) mode
+        clearDemoTimer()
+        const state = seedState(Date.now())
+        saveToStorage(state)
+        set({ state, demoStatus: "paused", demoStepIndex: 0 })
+      }
+      // execute exactly ONE event, then stay paused with a full interval ahead
+      if (runOneStep()) {
+        baseRemainingMs = BASE_STEP_DELAY_MS
+        set({ demoStatus: "paused" })
+      }
+    },
+
+    setDemoSpeed: (speed) => {
+      const { demoStatus } = get()
+      if (speed === get().demoSpeed) return
+      if (demoStatus === "playing") {
+        // rescale the in-flight wait so the change applies immediately
+        captureRemaining()
+        set({ demoSpeed: speed })
+        scheduleNext()
+      } else {
+        // while paused/idle nothing moves — the new speed applies on resume
+        set({ demoSpeed: speed })
+      }
     },
   }
 })

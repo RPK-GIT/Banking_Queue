@@ -10,12 +10,15 @@ import { KpiStrip } from "@/components/kpi-strip"
 import { NewCustomerCard } from "@/components/new-customer-card"
 import { QueueBoard } from "@/components/queue-board"
 import { TransferDialog } from "@/components/transfer-dialog"
+import { WhatsAppDock } from "@/components/whatsapp-dock"
 import { WhyPanel } from "@/components/why-panel"
 import { useQueueStore } from "@/lib/queue-store"
+import { Pause } from "lucide-react"
 
 export function Dashboard() {
   const hydrated = useQueueStore((s) => s.hydrated)
   const init = useQueueStore((s) => s.init)
+  const demoStatus = useQueueStore((s) => s.demoStatus)
   const [journeyCustomerId, setJourneyCustomerId] = useState<string | null>(null)
   const [transferCustomerId, setTransferCustomerId] = useState<string | null>(null)
 
@@ -57,6 +60,18 @@ export function Dashboard() {
         </div>
         <WhyPanel />
       </main>
+
+      {/* small non-blocking indicator — the dashboard stays fully interactive */}
+      {demoStatus === "paused" && (
+        <div className="pointer-events-none fixed bottom-5 left-1/2 z-40 -translate-x-1/2">
+          <span className="inline-flex items-center gap-2 rounded-full border border-amber-300 bg-amber-50/95 px-3 py-1.5 text-xs font-semibold tracking-wide text-amber-800 shadow-md">
+            <Pause className="size-3.5" aria-hidden />
+            DEMO PAUSED — explore freely
+          </span>
+        </div>
+      )}
+
+      <WhatsAppDock onOpenJourney={setJourneyCustomerId} />
 
       <JourneyDialog
         customerId={journeyCustomerId}

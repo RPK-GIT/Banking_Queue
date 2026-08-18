@@ -1,6 +1,6 @@
 "use client"
 
-import { Pause, Play, RotateCcw, Trash2 } from "lucide-react"
+import { Pause, Play, RotateCcw, SkipForward, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -10,32 +10,103 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { useQueueStore } from "@/lib/queue-store"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
+  DEMO_SPEEDS,
+  DEMO_STEP_COUNT,
+  useQueueStore,
+} from "@/lib/queue-store"
+import { cn } from "@/lib/utils"
 
 export function DemoControls() {
   const demoStatus = useQueueStore((s) => s.demoStatus)
+  const demoSpeed = useQueueStore((s) => s.demoSpeed)
+  const demoStepIndex = useQueueStore((s) => s.demoStepIndex)
   const playDemo = useQueueStore((s) => s.playDemo)
   const pauseDemo = useQueueStore((s) => s.pauseDemo)
+  const stepDemo = useQueueStore((s) => s.stepDemo)
+  const setDemoSpeed = useQueueStore((s) => s.setDemoSpeed)
   const resetDemo = useQueueStore((s) => s.resetDemo)
   const clearAll = useQueueStore((s) => s.clearAll)
+
+  const finished = demoStatus === "idle" && demoStepIndex >= DEMO_STEP_COUNT
 
   return (
     <Card className="gap-3 py-4 shadow-xs">
       <CardHeader className="px-4">
-        <CardTitle className="text-sm">Demo Controls</CardTitle>
+        <CardTitle className="flex items-center justify-between text-sm">
+          Demo Controls
+          {demoStatus === "paused" && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-amber-800 ring-1 ring-amber-600/20 ring-inset">
+              <Pause className="size-2.5" aria-hidden />
+              DEMO PAUSED
+            </span>
+          )}
+        </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-2 px-4">
-        {demoStatus === "playing" ? (
-          <Button onClick={pauseDemo} variant="secondary" className="w-full">
-            <Pause data-icon="inline-start" aria-hidden />
-            Pause
-          </Button>
-        ) : (
-          <Button onClick={playDemo} className="w-full">
-            <Play data-icon="inline-start" aria-hidden />
-            {demoStatus === "paused" ? "Resume Demo" : "▶ Play Demo"}
-          </Button>
-        )}
+        <div className="grid grid-cols-[1fr_auto] gap-2">
+          {demoStatus === "playing" ? (
+            <Button onClick={pauseDemo} variant="secondary" className="w-full">
+              <Pause data-icon="inline-start" aria-hidden />
+              Pause
+            </Button>
+          ) : (
+            <Button onClick={playDemo} className="w-full">
+              <Play data-icon="inline-start" aria-hidden />
+              {demoStatus === "paused"
+                ? "Resume"
+                : finished
+                  ? "Replay Live Demo"
+                  : "Start Live Demo"}
+            </Button>
+          )}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="icon"
+                  aria-label="Step — run exactly one demo event"
+                  disabled={demoStatus === "playing" || finished}
+                  onClick={stepDemo}
+                />
+              }
+            >
+              <SkipForward aria-hidden />
+            </TooltipTrigger>
+            <TooltipContent>
+              Step — run exactly one event, then stay paused
+            </TooltipContent>
+          </Tooltip>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] text-muted-foreground">Speed</span>
+          <div className="grid flex-1 grid-cols-4 gap-1">
+            {DEMO_SPEEDS.map((speed) => (
+              <button
+                key={speed}
+                type="button"
+                onClick={() => setDemoSpeed(speed)}
+                aria-pressed={demoSpeed === speed}
+                className={cn(
+                  "rounded-md border px-1 py-1 text-[11px] font-medium tabular-nums transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                  demoSpeed === speed
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-muted"
+                )}
+              >
+                {speed}×
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="grid grid-cols-2 gap-2">
           <Button
             variant="outline"
@@ -64,11 +135,14 @@ export function DemoControls() {
             Clear All
           </Button>
         </div>
-        {demoStatus !== "idle" && (
+
+        {(demoStatus !== "idle" || finished) && (
           <p className="text-center text-[11px] text-muted-foreground">
-            {demoStatus === "playing"
-              ? "Scripted demo running — watch T-115 travel across counters."
-              : "Demo paused — press Resume to continue."}
+            {demoStatus === "playing" &&
+              `Live demo running (step ${demoStepIndex} of ${DEMO_STEP_COUNT}) — watch T-115 travel across counters.`}
+            {demoStatus === "paused" &&
+              `Paused at step ${demoStepIndex} of ${DEMO_STEP_COUNT} — the dashboard stays fully interactive. Explore WhatsApp, journeys and queues, then Resume or Step.`}
+            {finished && "Demo complete — press Replay or Reset."}
           </p>
         )}
       </CardContent>
