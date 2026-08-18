@@ -1,9 +1,25 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ChevronDown, MessageCircle, PanelRightOpen, Route } from "lucide-react"
+import {
+  CheckCheck,
+  MessageCircle,
+  PanelRightOpen,
+  PauseCircle,
+  Route,
+  Zap,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Tooltip,
   TooltipContent,
@@ -20,16 +36,10 @@ function tokenNumber(customer: Customer): number {
   return Number(customer.token.replace("T-", "")) || 0
 }
 
-const STATUS_LABEL = {
-  waiting: "Waiting",
-  serving: "Being served",
-  completed: "Completed",
-} as const
-
 /**
- * Customer View — a PERMANENT right-side panel showing the customer's
- * simulated WhatsApp for the same canonical queue state the dashboard shows.
- * Always interactive, including while the demo engine is paused.
+ * Customer View — the right pane IS the customer's phone. A compact dropdown
+ * picks the customer; the simulated WhatsApp experience fills the rest of the
+ * pane (~85–90%). Fully interactive while the demo engine is paused.
  */
 export function CustomerViewPanel({
   collapsed,
@@ -44,7 +54,6 @@ export function CustomerViewPanel({
   const demoStatus = useQueueStore((s) => s.demoStatus)
   const demoStepIndex = useQueueStore((s) => s.demoStepIndex)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [showCompleted, setShowCompleted] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const prevDemoStatus = useRef(demoStatus)
 
@@ -84,49 +93,6 @@ export function CustomerViewPanel({
     if (el) el.scrollTop = el.scrollHeight
   }, [messages.length, selected?.id])
 
-  function customerRow(customer: Customer) {
-    const s = customerLiveStatus(state, customer.id)
-    const line =
-      s.status === "completed"
-        ? "Completed"
-        : s.position !== null
-          ? `Counter ${s.counterId} · #${s.position}`
-          : `Counter ${s.counterId} · serving`
-    const isSelected = selected?.id === customer.id
-    return (
-      <button
-        key={customer.id}
-        type="button"
-        onClick={() => setSelectedId(customer.id)}
-        aria-pressed={isSelected}
-        className={cn(
-          "flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-          isSelected ? "bg-primary/8 ring-1 ring-primary/30" : "hover:bg-muted"
-        )}
-      >
-        <span
-          className={cn(
-            "size-1.5 shrink-0 rounded-full",
-            s.status === "serving"
-              ? "bg-blue-500"
-              : s.status === "waiting"
-                ? "bg-amber-400"
-                : "bg-emerald-500"
-          )}
-          aria-hidden
-        />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs font-medium leading-tight">
-            {customer.name}
-          </span>
-          <span className="block truncate text-[10px] leading-tight text-muted-foreground">
-            {customer.token} · {line}
-          </span>
-        </span>
-      </button>
-    )
-  }
-
   if (collapsed) {
     return (
       <aside
@@ -152,68 +118,99 @@ export function CustomerViewPanel({
     )
   }
 
+  const statusLabel =
+    status === null
+      ? ""
+      : status.status === "on-hold"
+        ? "On Hold"
+        : status.priority
+          ? "Priority — Next After Current"
+          : status.status === "serving"
+            ? "Being served"
+            : status.status === "completed"
+              ? "Completed"
+              : "Waiting"
+
   return (
     <aside
       aria-label="Customer view"
       className="flex w-[330px] shrink-0 flex-col border-l bg-card min-[1600px]:w-[380px]"
     >
-      {/* panel header */}
-      <div className="flex shrink-0 items-center justify-between border-b px-3 py-2">
-        <div>
+      {/* pane header + compact customer selector */}
+      <div className="flex shrink-0 flex-col gap-1.5 border-b px-3 py-2">
+        <div className="flex items-center justify-between">
           <h2 className="flex items-center gap-1.5 text-sm font-semibold">
             <MessageCircle className="size-4 text-[#25d366]" aria-hidden />
             Customer View
           </h2>
-          <p className="text-[9px] font-semibold tracking-widest text-muted-foreground uppercase">
-            Simulated WhatsApp
-          </p>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Collapse customer view"
+            onClick={onToggleCollapsed}
+          >
+            <PanelRightOpen aria-hidden />
+          </Button>
         </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Collapse customer view"
-          onClick={onToggleCollapsed}
-        >
-          <PanelRightOpen aria-hidden />
-        </Button>
+        <div className="flex items-center gap-2">
+          <span className="shrink-0 text-[11px] text-muted-foreground">
+            Customer
+          </span>
+          <Select
+            value={selected?.id ?? ""}
+            onValueChange={(v) => v && setSelectedId(v as string)}
+          >
+            <SelectTrigger
+              size="sm"
+              aria-label="Select customer"
+              className="w-full min-w-0 flex-1 text-xs"
+            >
+              <SelectValue>
+                {() =>
+                  selected ? (
+                    <span className="truncate">
+                      {selected.name} — {selected.token}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">No customers</span>
+                  )
+                }
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                <SelectLabel>Active customers</SelectLabel>
+                {active.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name} — {c.token}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+              {completed.length > 0 && (
+                <SelectGroup>
+                  <SelectLabel>Completed</SelectLabel>
+                  {completed.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name} — {c.token} ✓
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              )}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
-      {/* active customers selector */}
-      <div className="flex max-h-56 shrink-0 flex-col border-b">
-        <p className="shrink-0 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
-          Active Customers · {active.length}
-        </p>
-        <div className="min-h-0 overflow-y-auto px-1.5 pb-1.5">
-          {active.map(customerRow)}
-          {active.length === 0 && (
-            <p className="px-2 py-2 text-center text-[11px] text-muted-foreground">
-              No active customers.
-            </p>
-          )}
-          {completed.length > 0 && (
-            <>
-              <button
-                type="button"
-                onClick={() => setShowCompleted((s) => !s)}
-                className="mt-0.5 flex w-full items-center justify-center gap-1 rounded-md px-2 py-0.5 text-[10px] text-muted-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60"
-              >
-                <ChevronDown
-                  className={cn("size-3 transition-transform", showCompleted && "rotate-180")}
-                  aria-hidden
-                />
-                {showCompleted ? "Hide completed" : `${completed.length} completed`}
-              </button>
-              {showCompleted && completed.map(customerRow)}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* phone */}
+      {/* THE PHONE — the WhatsApp simulation fills the rest of the pane */}
       {selected && status ? (
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex min-h-0 flex-1 flex-col" data-testid="wa-phone">
+          <p className="shrink-0 bg-muted/60 py-0.5 text-center text-[8px] font-semibold tracking-[0.2em] text-muted-foreground/80 uppercase">
+            Simulated customer view
+          </p>
+
+          {/* WhatsApp header */}
           <div className="flex shrink-0 items-center gap-2 bg-[#075e54] px-3 py-2 text-white">
-            <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/20 text-xs font-bold">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white/20 text-xs font-bold">
               {selected.name
                 .split(" ")
                 .map((p) => p[0])
@@ -224,12 +221,13 @@ export function CustomerViewPanel({
               <p className="truncate text-sm leading-tight font-semibold">
                 {selected.name}
               </p>
-              <p className="text-[11px] leading-tight text-white/80">
-                {selected.token} · SBI Demo Branch
+              <p className="truncate text-[11px] leading-tight text-white/80">
+                {selected.token} · SBI Demo Branch · online
               </p>
             </div>
           </div>
 
+          {/* conversation */}
           <div
             ref={scrollRef}
             data-testid="wa-conversation"
@@ -244,57 +242,87 @@ export function CustomerViewPanel({
                   <p className="text-[12px] leading-snug whitespace-pre-line">
                     {message.text}
                   </p>
-                  <p className="mt-0.5 text-right text-[10px] text-muted-foreground">
+                  <p className="mt-0.5 flex items-center justify-end gap-1 text-right text-[10px] text-muted-foreground">
                     {formatTime(message.at)}
+                    <CheckCheck className="size-3 text-[#53bdeb]" aria-hidden />
                   </p>
                 </div>
               ))}
             </div>
-          </div>
 
-          {/* live status snapshot — same state the bank sees */}
-          <div className="shrink-0 border-t bg-card px-3 py-2">
-            <div className="grid grid-cols-4 gap-2 text-center">
-              <div>
-                <p className="text-[10px] text-muted-foreground uppercase">Queue</p>
-                <p className="truncate text-xs font-semibold">
+            {/* live status card — pinned as the latest "message" */}
+            <div className="mt-2 max-w-[90%] rounded-lg rounded-tl-none bg-white px-2.5 py-2 shadow-sm ring-1 ring-[#25d366]/40">
+              <p className="text-[10px] font-semibold tracking-wide text-[#075e54] uppercase">
+                Live status
+              </p>
+              <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                <span className="text-muted-foreground">Token</span>
+                <span className="text-right font-mono font-semibold">
+                  {selected.token}
+                </span>
+                <span className="text-muted-foreground">Queue</span>
+                <span className="truncate text-right font-medium">
                   {status.counterName ?? "—"}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] text-muted-foreground uppercase">Position</p>
-                <p className="text-xs font-semibold tabular-nums">
-                  {status.position !== null ? `#${status.position}` : "—"}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] text-muted-foreground uppercase">Est. wait</p>
-                <p className="text-xs font-semibold tabular-nums">
-                  {status.estWaitMin !== null
-                    ? `~${status.estWaitMin} min`
-                    : status.status === "serving"
-                      ? "now"
-                      : "—"}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] text-muted-foreground uppercase">Status</p>
-                <p
+                </span>
+                <span className="text-muted-foreground">Counter</span>
+                <span className="text-right font-medium">
+                  {status.counterId !== null ? `Counter ${status.counterId}` : "—"}
+                </span>
+                <span className="text-muted-foreground">Position</span>
+                <span className="text-right font-medium tabular-nums">
+                  {status.status === "on-hold"
+                    ? "—"
+                    : status.priority
+                      ? "Next"
+                      : status.position !== null
+                        ? `#${status.position}`
+                        : "—"}
+                </span>
+                <span className="text-muted-foreground">Est. wait</span>
+                <span className="text-right font-medium tabular-nums">
+                  {status.status === "on-hold"
+                    ? "on hold"
+                    : status.estWaitMin !== null
+                      ? `~${status.estWaitMin} min`
+                      : status.status === "serving"
+                        ? "now"
+                        : "—"}
+                </span>
+                <span className="text-muted-foreground">Status</span>
+                <span
                   className={cn(
-                    "text-xs font-semibold",
-                    status.status === "waiting" && "text-amber-600",
+                    "flex items-center justify-end gap-1 text-right font-semibold",
+                    status.status === "waiting" && !status.priority && "text-amber-600",
+                    status.priority && "text-violet-600",
                     status.status === "serving" && "text-blue-600",
+                    status.status === "on-hold" && "text-orange-600",
                     status.status === "completed" && "text-emerald-600"
                   )}
                 >
-                  {STATUS_LABEL[status.status]}
-                </p>
+                  {status.status === "on-hold" && (
+                    <PauseCircle className="size-3" aria-hidden />
+                  )}
+                  {status.priority && <Zap className="size-3" aria-hidden />}
+                  {statusLabel}
+                </span>
+                {status.holdReason && (
+                  <>
+                    <span className="text-muted-foreground">Reason</span>
+                    <span className="truncate text-right font-medium">
+                      {status.holdReason}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
+          </div>
+
+          {/* footer — bank-side shortcut */}
+          <div className="shrink-0 border-t bg-card px-3 py-1.5">
             <button
               type="button"
               onClick={() => onOpenJourney(selected.id)}
-              className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium text-primary outline-none hover:bg-primary/5 focus-visible:ring-2 focus-visible:ring-ring/60"
+              className="flex w-full items-center justify-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium text-primary outline-none hover:bg-primary/5 focus-visible:ring-2 focus-visible:ring-ring/60"
             >
               <Route className="size-3" aria-hidden />
               View full journey (bank view)

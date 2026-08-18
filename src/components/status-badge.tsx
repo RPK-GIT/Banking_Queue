@@ -4,12 +4,14 @@ import type { CustomerStatus } from "@/lib/types"
 const STYLES: Record<CustomerStatus, string> = {
   waiting: "bg-amber-50 text-amber-700 ring-amber-600/20",
   serving: "bg-blue-50 text-blue-700 ring-blue-600/20",
+  "on-hold": "bg-orange-50 text-orange-700 ring-orange-600/20",
   completed: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
 }
 
 const LABELS: Record<CustomerStatus, string> = {
   waiting: "Waiting",
   serving: "Being served",
+  "on-hold": "On hold",
   completed: "Completed",
 }
 

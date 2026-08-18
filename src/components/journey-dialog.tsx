@@ -78,6 +78,24 @@ function buildTimeline(customer: Customer): TimelineEvent[] {
     if (step.startedAt) {
       events.push({ at: step.startedAt, text: `Counter ${step.counterId} started` })
     }
+    for (const hold of step.holds) {
+      events.push({
+        at: hold.startedAt,
+        text: `Put on hold at Counter ${step.counterId} — ${hold.reason}`,
+      })
+      if (hold.releasedAt) {
+        events.push({
+          at: hold.releasedAt,
+          text: `Hold released — next after current at Counter ${step.counterId}`,
+        })
+      }
+      if (hold.resumedAt) {
+        events.push({
+          at: hold.resumedAt,
+          text: `Service resumed at Counter ${step.counterId}`,
+        })
+      }
+    }
     if (step.completedAt) {
       events.push({
         at: step.completedAt,
@@ -95,6 +113,8 @@ function statusLine(customer: Customer): string {
   if (customer.status === "completed") return "Journey completed"
   if (customer.status === "serving")
     return `Being served at Counter ${customer.currentCounterId}`
+  if (customer.status === "on-hold")
+    return `On hold at Counter ${customer.currentCounterId}`
   return `Waiting at Counter ${customer.currentCounterId}`
 }
 

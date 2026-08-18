@@ -35,6 +35,12 @@ describe("visualization preferences persist locally", () => {
     })
   })
 
+  it("remembers the Capacity vs Actual grouped-bar choice", () => {
+    const storage = fakeStorage()
+    saveVizPref("capacity-vs-actual", "grouped-bar", storage)
+    expect(getVizPref("capacity-vs-actual", "table", storage)).toBe("grouped-bar")
+  })
+
   it("stores only visualization choices, no business data", () => {
     const storage = fakeStorage()
     saveVizPref("employee-workload", "donut", storage)

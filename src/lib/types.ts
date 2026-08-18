@@ -12,9 +12,34 @@ export const SERVICE_TYPES = [
 
 export type ServiceType = (typeof SERVICE_TYPES)[number]
 
-export type CustomerStatus = "waiting" | "serving" | "completed"
+export type CustomerStatus = "waiting" | "serving" | "on-hold" | "completed"
 
-export type JourneyStepStatus = "waiting" | "serving" | "completed"
+export type JourneyStepStatus = "waiting" | "serving" | "on-hold" | "completed"
+
+export const HOLD_REASONS = [
+  "Waiting for customer",
+  "Document required",
+  "Verification pending",
+  "System issue",
+  "Other",
+] as const
+
+export type HoldReason = (typeof HOLD_REASONS)[number]
+
+/**
+ * One hold episode inside a service step. Hold time = releasedAt − startedAt.
+ * The gap releasedAt → resumedAt (waiting as "next after current") counts as
+ * neither hold nor processing time.
+ */
+export interface HoldRecord {
+  reason: HoldReason
+  /** epoch ms — when the employee put the customer on hold */
+  startedAt: number
+  /** epoch ms — when the hold was released (priority wait begins) */
+  releasedAt: number | null
+  /** epoch ms — when service actually resumed after the release */
+  resumedAt: number | null
+}
 
 export interface JourneyStep {
   counterId: number
@@ -26,6 +51,8 @@ export interface JourneyStep {
   /** epoch ms — when service finished at this counter */
   completedAt: number | null
   status: JourneyStepStatus
+  /** hold episodes at this counter, oldest first */
+  holds: HoldRecord[]
 }
 
 export interface Customer {
@@ -57,6 +84,14 @@ export interface Counter {
   currentCustomerId: string | null
   /** customer ids in strict FIFO order — index 0 is served next */
   queue: string[]
+  /**
+   * released-from-hold customers, in release order — served BEFORE the normal
+   * FIFO queue ("next after current"). They already started service, so a
+   * release restores their priority rather than sending them to the back.
+   */
+  priorityQueue: string[]
+  /** customers currently ON HOLD at this counter — outside FIFO entirely */
+  heldIds: string[]
 }
 
 export type ActivityType =
@@ -65,6 +100,8 @@ export type ActivityType =
   | "service-completed"
   | "transferred"
   | "journey-completed"
+  | "held"
+  | "hold-released"
   | "reset"
 
 export interface Activity {

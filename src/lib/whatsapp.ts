@@ -1,4 +1,4 @@
-import { queuePosition } from "./queue-logic"
+import { isPriority, queuePosition } from "./queue-logic"
 import type { Customer, CustomerStatus, QueueState } from "./types"
 
 /**
@@ -14,7 +14,8 @@ export interface WhatsAppMessage {
 }
 
 /** average minutes one customer ahead of you takes to serve (demo heuristic) */
-const MINUTES_PER_CUSTOMER = 3.5
+export const ESTIMATED_MINUTES_PER_CUSTOMER = 3.5
+const MINUTES_PER_CUSTOMER = ESTIMATED_MINUTES_PER_CUSTOMER
 
 export function buildWhatsAppMessages(customer: Customer): WhatsAppMessage[] {
   const messages: WhatsAppMessage[] = []
@@ -41,6 +42,20 @@ export function buildWhatsAppMessages(customer: Customer): WhatsAppMessage[] {
         text: `It's your turn! 🔔 Please proceed to Counter ${step.counterId} (${step.counterName}).`,
       })
     }
+    step.holds.forEach((hold, h) => {
+      messages.push({
+        id: `${customer.id}-hold-${i}-${h}`,
+        at: hold.startedAt,
+        text: `Your request is temporarily on hold.\nReason: ${hold.reason}.\nWe will resume your service shortly.`,
+      })
+      if (hold.releasedAt !== null) {
+        messages.push({
+          id: `${customer.id}-hold-released-${i}-${h}`,
+          at: hold.releasedAt,
+          text: `Your request has been resumed. ✅\nYou will be served next at Counter ${step.counterId} (${step.counterName}).`,
+        })
+      }
+    })
   })
 
   if (customer.completedAt !== null) {
@@ -58,7 +73,14 @@ export interface CustomerLiveStatus {
   status: CustomerStatus
   counterId: number | null
   counterName: string | null
-  /** 1-based queue position, null unless waiting */
+  /**
+   * waiting with restored priority after a hold release —
+   * "Priority — Next After Current"
+   */
+  priority: boolean
+  /** current hold reason, only while on hold */
+  holdReason: string | null
+  /** 1-based queue position, null unless waiting (never shown while held) */
   position: number | null
   /** estimated wait in whole minutes, null unless waiting */
   estWaitMin: number | null
@@ -77,18 +99,27 @@ export function customerLiveStatus(
       status: "completed",
       counterId: null,
       counterName: null,
+      priority: false,
+      holdReason: null,
       position: null,
       estWaitMin: null,
     }
   }
 
+  // no normal queue position while held — the ticket is outside FIFO
   const position =
     customer.status === "waiting" ? queuePosition(state, customerId) : null
+  const openHold =
+    customer.status === "on-hold"
+      ? step.holds.find((h) => h.releasedAt === null)
+      : undefined
 
   return {
     status: customer.status,
     counterId: step.counterId,
     counterName: step.counterName,
+    priority: customer.status === "waiting" && isPriority(state, customerId),
+    holdReason: openHold?.reason ?? null,
     position,
     estWaitMin:
       position !== null ? Math.floor(position * MINUTES_PER_CUSTOMER) : null,

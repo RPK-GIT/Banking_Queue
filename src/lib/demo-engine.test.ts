@@ -161,6 +161,60 @@ describe("demo engine — pause freezes the simulation, not the app", () => {
     expect(ravi?.journey.map((s) => s.counterId)).toEqual([1, 4, 3, 1])
   })
 
+  it("demonstrates the HOLD scenario deterministically (hold → held → release → priority → served)", () => {
+    store().setDemoSpeed(1) // speed persists across tests — pin it
+    store().playDemo()
+
+    // advance until Ravi (T-104) is ON HOLD at Counter 1
+    const raviId = () =>
+      Object.values(store().state.customers).find((c) => c.token === "T-104")!.id
+    let safety = 0
+    while (
+      store().state.customers[raviId()]?.status !== "on-hold" &&
+      safety < DEMO_STEP_COUNT
+    ) {
+      vi.advanceTimersByTime(STEP_DELAY)
+      safety += 1
+    }
+    const heldState = store().state
+    const counter1 = heldState.counters[0]
+    const ravi = heldState.customers[raviId()]
+    expect(ravi.status).toBe("on-hold")
+    expect(counter1.heldIds).toContain(ravi.id)
+    expect(counter1.currentCustomerId).toBeNull()
+    // another customer (T-116 Vikram) remains waiting in normal FIFO
+    const vikram = Object.values(heldState.customers).find(
+      (c) => c.token === "T-116"
+    )
+    expect(vikram).toBeDefined()
+
+    // next step: Counter 1 calls next — the HELD ticket is skipped
+    vi.advanceTimersByTime(STEP_DELAY)
+    expect(store().state.counters[0].currentCustomerId).toBe(vikram!.id)
+    expect(store().state.customers[raviId()].status).toBe("on-hold")
+
+    // release → Ravi becomes NEXT AFTER CURRENT (priority queue)
+    vi.advanceTimersByTime(STEP_DELAY)
+    expect(store().state.counters[0].priorityQueue).toEqual([raviId()])
+    expect(store().state.customers[raviId()].status).toBe("waiting")
+
+    // current (Vikram) completes, then Ravi is served FIRST despite T-116's
+    // hold-time arrival — the released hold restores his priority
+    vi.advanceTimersByTime(STEP_DELAY) // complete Vikram
+    vi.advanceTimersByTime(STEP_DELAY) // call next → Ravi
+    expect(store().state.counters[0].currentCustomerId).toBe(raviId())
+
+    // run to the end — Ravi's journey completes with exactly one hold episode
+    vi.advanceTimersByTime(DEMO_STEP_COUNT * STEP_DELAY)
+    const done = store().state.customers[raviId()]
+    expect(done.status).toBe("completed")
+    const lastStep = done.journey[done.journey.length - 1]
+    expect(lastStep.holds).toHaveLength(1)
+    expect(lastStep.holds[0].reason).toBe("Document required")
+    expect(lastStep.holds[0].releasedAt).not.toBeNull()
+    expect(lastStep.holds[0].resumedAt).not.toBeNull()
+  })
+
   it("pause prevents any new notifications from being generated", async () => {
     const { toast } = await import("sonner")
     store().playDemo()

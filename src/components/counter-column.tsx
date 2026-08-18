@@ -8,6 +8,8 @@ import {
   BellRing,
   CheckCheck,
   ChevronDown,
+  PauseCircle,
+  PlayCircle,
   UserRound,
 } from "lucide-react"
 import { notifyTransient } from "@/lib/notifications"
@@ -33,6 +35,7 @@ interface CounterColumnProps {
   now: number
   onSelectCustomer: (customerId: string) => void
   onTransfer: (customerId: string) => void
+  onHold: (customerId: string) => void
 }
 
 export function CounterColumn({
@@ -40,10 +43,12 @@ export function CounterColumn({
   now,
   onSelectCustomer,
   onTransfer,
+  onHold,
 }: CounterColumnProps) {
   const customers = useQueueStore((s) => s.state.customers)
   const callNext = useQueueStore((s) => s.callNext)
   const completeService = useQueueStore((s) => s.completeService)
+  const release = useQueueStore((s) => s.release)
   const [showAll, setShowAll] = useState(false)
 
   const serving = counter.currentCustomerId
@@ -64,6 +69,13 @@ export function CounterColumn({
         description: `${called.name} — ${called.serviceType}`,
       })
     }
+  }
+
+  function handleRelease(customerId: string) {
+    const released = release(customerId)
+    notifyTransient(`${released.token} hold released`, {
+      description: "Priority restored — next after the current customer.",
+    })
   }
 
   function handleComplete() {
@@ -151,10 +163,19 @@ export function CounterColumn({
                   {serving.serviceType}
                 </p>
               </button>
-              <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+              <div className="mt-1.5 grid grid-cols-3 gap-1.5">
                 <Button size="xs" onClick={handleComplete} className="w-full">
                   <CheckCheck data-icon="inline-start" aria-hidden />
                   Complete
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => onHold(serving.id)}
+                  className="w-full border-orange-300 text-orange-700 hover:bg-orange-50 hover:text-orange-800"
+                >
+                  <PauseCircle data-icon="inline-start" aria-hidden />
+                  Hold
                 </Button>
                 <Button
                   size="xs"
@@ -185,7 +206,9 @@ export function CounterColumn({
                       size="xs"
                       variant="secondary"
                       className="mt-1.5 w-full"
-                      disabled={counter.queue.length === 0}
+                      disabled={
+                        counter.queue.length + counter.priorityQueue.length === 0
+                      }
                       onClick={handleCallNext}
                     />
                   }
@@ -194,13 +217,50 @@ export function CounterColumn({
                   Call Next
                 </TooltipTrigger>
                 <TooltipContent>
-                  Only the first customer in the queue can be called (FIFO)
+                  Released holds are served first, then strict FIFO — held
+                  tickets are never selected
                 </TooltipContent>
               </Tooltip>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
+
+      {/* NEXT AFTER CURRENT — released holds, served before the normal queue */}
+      {counter.priorityQueue.length > 0 && (
+        <div className="shrink-0 border-b border-violet-200 bg-violet-50/70 px-3 py-1.5">
+          <p className="text-[10px] font-semibold tracking-wide text-violet-700 uppercase">
+            Next after current
+          </p>
+          <div className="mt-1 flex flex-col gap-1">
+            {counter.priorityQueue.map((customerId) => {
+              const customer = customers[customerId]
+              if (!customer) return null
+              return (
+                <button
+                  key={customer.id}
+                  type="button"
+                  onClick={() => onSelectCustomer(customer.id)}
+                  title={`View ${customer.token}'s journey`}
+                  className="w-full rounded-lg border border-violet-300 bg-white px-2.5 py-1.5 text-left outline-none hover:border-violet-400 focus-visible:ring-2 focus-visible:ring-ring/60"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-xs font-semibold text-violet-800">
+                      {customer.token}
+                    </span>
+                    <span className="rounded-full bg-violet-100 px-1.5 py-px text-[10px] font-semibold text-violet-700">
+                      priority · released hold
+                    </span>
+                  </div>
+                  <p className="truncate text-[12px] font-medium text-violet-950">
+                    {customer.name}
+                  </p>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* FIFO queue — scrolls INSIDE the card, never the page */}
       <div className="flex min-h-0 flex-1 flex-col bg-muted/20">
@@ -248,6 +308,63 @@ export function CounterColumn({
           )}
         </div>
       </div>
+
+      {/* ON HOLD — outside FIFO entirely, visually distinct at the bottom */}
+      {counter.heldIds.length > 0 && (
+        <div className="shrink-0 border-t-2 border-dashed border-orange-300 bg-orange-50/70 px-3 py-2">
+          <p className="flex items-center gap-1 text-[10px] font-semibold tracking-wide text-orange-700 uppercase">
+            <PauseCircle className="size-3" aria-hidden />
+            On hold · {counter.heldIds.length}
+          </p>
+          <div className="mt-1 flex flex-col gap-1.5">
+            {counter.heldIds.map((customerId) => {
+              const customer = customers[customerId]
+              if (!customer) return null
+              const step = customer.journey[customer.journey.length - 1]
+              const hold = step.holds.find((h) => h.releasedAt === null)
+              return (
+                <div
+                  key={customer.id}
+                  className="rounded-lg border border-orange-300 bg-white px-2.5 py-1.5"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onSelectCustomer(customer.id)}
+                    title={`View ${customer.token}'s journey`}
+                    className="w-full text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-xs font-semibold text-orange-800">
+                        {customer.token}
+                      </span>
+                      <span className="font-mono text-[11px] tabular-nums text-orange-700/80">
+                        {hold ? formatDuration(now - hold.startedAt) : ""}
+                      </span>
+                    </div>
+                    <p className="truncate text-[12px] font-medium text-orange-950">
+                      {customer.name}
+                    </p>
+                    {hold && (
+                      <p className="truncate text-[11px] text-orange-800/70">
+                        {hold.reason}
+                      </p>
+                    )}
+                  </button>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => handleRelease(customer.id)}
+                    className="mt-1.5 w-full border-violet-300 text-violet-700 hover:bg-violet-50 hover:text-violet-800"
+                  >
+                    <PlayCircle data-icon="inline-start" aria-hidden />
+                    Release Hold
+                  </Button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </Card>
   )
 }

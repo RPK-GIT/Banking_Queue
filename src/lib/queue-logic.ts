@@ -2,6 +2,7 @@ import type {
   ActivityType,
   Counter,
   Customer,
+  HoldReason,
   QueueState,
   ServiceType,
 } from "./types"
@@ -36,6 +37,8 @@ export function emptyState(): QueueState {
       status: "available",
       currentCustomerId: null,
       queue: [],
+      priorityQueue: [],
+      heldIds: [],
     })),
     activities: [],
     nextTokenNumber: 101,
@@ -80,14 +83,23 @@ function getCustomer(state: QueueState, customerId: string): Customer {
 
 /**
  * Rule 7 — queue position is always derived, never stored.
- * Returns 1-based position in the counter's waiting queue, or null.
+ * Returns 1-based position in the counter's waiting line, or null. Released
+ * hold customers occupy the FRONT positions ("next after current"), so normal
+ * FIFO positions are offset by the priority queue length.
  */
 export function queuePosition(state: QueueState, customerId: string): number | null {
   for (const counter of state.counters) {
+    const priorityIdx = counter.priorityQueue.indexOf(customerId)
+    if (priorityIdx !== -1) return priorityIdx + 1
     const idx = counter.queue.indexOf(customerId)
-    if (idx !== -1) return idx + 1
+    if (idx !== -1) return counter.priorityQueue.length + idx + 1
   }
   return null
+}
+
+/** Is this customer waiting with restored priority ("next after current")? */
+export function isPriority(state: QueueState, customerId: string): boolean {
+  return state.counters.some((c) => c.priorityQueue.includes(customerId))
 }
 
 export interface IssueTokenInput {
@@ -125,6 +137,7 @@ export function issueToken(
         startedAt: null,
         completedAt: null,
         status: "waiting",
+        holds: [],
       },
     ],
     plannedRoute: input.plannedRoute ?? [],
@@ -144,7 +157,9 @@ export function issueToken(
 }
 
 /**
- * Rule 9 — only the FIRST waiting customer can be called.
+ * Rule 9 — only the FIRST waiting customer can be called. Released hold
+ * customers ("next after current") take precedence over the normal FIFO queue,
+ * in release order. Customers ON hold are never selected.
  */
 export function callNextCustomer(
   state: QueueState,
@@ -155,7 +170,10 @@ export function callNextCustomer(
   if (counter.currentCustomerId) {
     throw new Error(`${counterLabel(counterId)} is already serving a customer`)
   }
-  const nextId = counter.queue.shift()
+  const fromPriority = counter.priorityQueue.length > 0
+  const nextId = fromPriority
+    ? counter.priorityQueue.shift()
+    : counter.queue.shift()
   if (!nextId) return null
 
   const customer = getCustomer(state, nextId)
@@ -164,14 +182,94 @@ export function callNextCustomer(
   customer.status = "serving"
 
   const step = customer.journey[customer.journey.length - 1]
-  step.startedAt = now
+  if (fromPriority) {
+    // resuming a released hold — service already started once; keep the
+    // original startedAt and close the hold episode's priority-wait gap
+    const openHold = step.holds.find((h) => h.resumedAt === null)
+    if (openHold) openHold.resumedAt = now
+  } else {
+    step.startedAt = now
+  }
   step.status = "serving"
 
   pushActivity(
     state,
     "called",
     customer.id,
-    `${customer.token} called at ${counterLabel(counterId)}`,
+    fromPriority
+      ? `${customer.token} resumed at ${counterLabel(counterId)} (priority after hold)`
+      : `${customer.token} called at ${counterLabel(counterId)}`,
+    now
+  )
+  return customer
+}
+
+/**
+ * HOLD — only the customer CURRENTLY BEING SERVED can be put on hold. The
+ * token, journey and employee/counter relationship are preserved; the customer
+ * leaves active service and normal FIFO eligibility entirely.
+ */
+export function holdCurrentCustomer(
+  state: QueueState,
+  counterId: number,
+  reason: HoldReason,
+  now: number
+): Customer {
+  const counter = getCounter(state, counterId)
+  if (!counter.currentCustomerId) {
+    throw new Error(`${counterLabel(counterId)} is not serving anyone`)
+  }
+  const customer = getCustomer(state, counter.currentCustomerId)
+
+  counter.currentCustomerId = null
+  counter.status = "available"
+  counter.heldIds.push(customer.id)
+
+  customer.status = "on-hold"
+  const step = customer.journey[customer.journey.length - 1]
+  step.status = "on-hold"
+  step.holds.push({ reason, startedAt: now, releasedAt: null, resumedAt: null })
+
+  pushActivity(
+    state,
+    "held",
+    customer.id,
+    `${customer.token} put on hold at ${counterLabel(counterId)} — ${reason}`,
+    now
+  )
+  return customer
+}
+
+/**
+ * RELEASE HOLD — the customer moves to the priority queue ("next after
+ * current") and will be served before the normal FIFO queue, in release order.
+ */
+export function releaseHold(
+  state: QueueState,
+  customerId: string,
+  now: number
+): Customer {
+  const customer = getCustomer(state, customerId)
+  if (customer.status !== "on-hold") {
+    throw new Error(`${customer.token} is not on hold`)
+  }
+  const counter = state.counters.find((c) => c.heldIds.includes(customerId))
+  if (!counter) throw new Error(`${customer.token} not found in any hold list`)
+
+  counter.heldIds.splice(counter.heldIds.indexOf(customerId), 1)
+  counter.priorityQueue.push(customerId)
+
+  customer.status = "waiting"
+  const step = customer.journey[customer.journey.length - 1]
+  step.status = "waiting"
+  const openHold = step.holds.find((h) => h.releasedAt === null)
+  if (openHold) openHold.releasedAt = now
+
+  pushActivity(
+    state,
+    "hold-released",
+    customer.id,
+    `${customer.token} hold released at ${counterLabel(counter.id)} — next after current`,
     now
   )
   return customer
@@ -238,6 +336,12 @@ export function transferCustomer(
   now: number
 ): TransferResult {
   const customer = getCustomer(state, customerId)
+  if (customer.status === "on-hold") {
+    // no ambiguous queue states: release the hold and resume service first
+    throw new Error(
+      `${customer.token} is on hold — release the hold before transferring`
+    )
+  }
   const fromCounterId = customer.currentCounterId
   if (fromCounterId === null) {
     throw new Error(`${customer.token} is not at any counter`)
@@ -262,8 +366,10 @@ export function transferCustomer(
     )
   } else {
     const idx = from.queue.indexOf(customer.id)
-    if (idx === -1) throw new Error(`${customer.token} not found in queue`)
-    from.queue.splice(idx, 1)
+    const priorityIdx = from.priorityQueue.indexOf(customer.id)
+    if (idx !== -1) from.queue.splice(idx, 1)
+    else if (priorityIdx !== -1) from.priorityQueue.splice(priorityIdx, 1)
+    else throw new Error(`${customer.token} not found in queue`)
     const step = customer.journey[customer.journey.length - 1]
     step.completedAt = now
     step.status = "completed"
@@ -283,6 +389,7 @@ export function transferCustomer(
     startedAt: null,
     completedAt: null,
     status: "waiting",
+    holds: [],
   })
 
   const position = to.queue.length

@@ -16,7 +16,9 @@ import { ActivityFeed } from "@/components/activity-feed"
 import { AppHeader } from "@/components/app-header"
 import { CustomerViewPanel } from "@/components/customer-view-panel"
 import { DemoControls } from "@/components/demo-controls"
+import { HoldDialog } from "@/components/hold-dialog"
 import { JourneyDialog } from "@/components/journey-dialog"
+import { KpiDrilldownDialog, type MainKpiId } from "@/components/kpi-drilldown"
 import { KpiStrip } from "@/components/kpi-strip"
 import { ManagerDashboard } from "@/components/manager-dashboard"
 import { NewCustomerCard } from "@/components/new-customer-card"
@@ -182,6 +184,8 @@ export function Dashboard() {
   const [whyOpen, setWhyOpen] = useState(false)
   const [journeyCustomerId, setJourneyCustomerId] = useState<string | null>(null)
   const [transferCustomerId, setTransferCustomerId] = useState<string | null>(null)
+  const [drilldownKpi, setDrilldownKpi] = useState<MainKpiId | null>(null)
+  const [holdCustomerId, setHoldCustomerId] = useState<string | null>(null)
 
   useEffect(() => {
     init()
@@ -251,14 +255,15 @@ export function Dashboard() {
           {hydrated ? (
             view === "operations" ? (
               <>
-                <KpiStrip />
+                <KpiStrip onDrilldown={setDrilldownKpi} />
                 <QueueBoard
                   onSelectCustomer={setJourneyCustomerId}
                   onTransfer={setTransferCustomerId}
+                  onHold={setHoldCustomerId}
                 />
               </>
             ) : (
-              <ManagerDashboard />
+              <ManagerDashboard onOpenJourney={setJourneyCustomerId} />
             )
           ) : (
             <>
@@ -319,6 +324,11 @@ export function Dashboard() {
       )}
 
       <WhyDialog open={whyOpen} onClose={() => setWhyOpen(false)} />
+      <KpiDrilldownDialog
+        kpi={drilldownKpi}
+        onClose={() => setDrilldownKpi(null)}
+        onOpenJourney={setJourneyCustomerId}
+      />
       <JourneyDialog
         customerId={journeyCustomerId}
         onClose={() => setJourneyCustomerId(null)}
@@ -326,6 +336,10 @@ export function Dashboard() {
       <TransferDialog
         customerId={transferCustomerId}
         onClose={() => setTransferCustomerId(null)}
+      />
+      <HoldDialog
+        customerId={holdCustomerId}
+        onClose={() => setHoldCustomerId(null)}
       />
     </div>
   )

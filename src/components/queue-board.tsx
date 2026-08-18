@@ -7,9 +7,14 @@ import { useNow } from "@/hooks/use-now"
 interface QueueBoardProps {
   onSelectCustomer: (customerId: string) => void
   onTransfer: (customerId: string) => void
+  onHold: (customerId: string) => void
 }
 
-export function QueueBoard({ onSelectCustomer, onTransfer }: QueueBoardProps) {
+export function QueueBoard({
+  onSelectCustomer,
+  onTransfer,
+  onHold,
+}: QueueBoardProps) {
   const counters = useQueueStore((s) => s.state.counters)
   const now = useNow(1000)
 
@@ -29,6 +34,7 @@ export function QueueBoard({ onSelectCustomer, onTransfer }: QueueBoardProps) {
             now={now}
             onSelectCustomer={onSelectCustomer}
             onTransfer={onTransfer}
+            onHold={onHold}
           />
         ))}
       </div>

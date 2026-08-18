@@ -6,6 +6,8 @@ import {
   BellRing,
   CheckCircle2,
   CircleCheck,
+  PauseCircle,
+  PlayCircle,
   Radio,
   TicketPlus,
 } from "lucide-react"
@@ -31,6 +33,11 @@ const ICONS: Record<ActivityType, { icon: LucideIcon; className: string }> = {
   "journey-completed": {
     icon: CheckCircle2,
     className: "bg-emerald-100 text-emerald-700",
+  },
+  held: { icon: PauseCircle, className: "bg-orange-100 text-orange-700" },
+  "hold-released": {
+    icon: PlayCircle,
+    className: "bg-violet-100 text-violet-700",
   },
   reset: { icon: Radio, className: "bg-muted text-muted-foreground" },
 }

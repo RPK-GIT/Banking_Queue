@@ -8,15 +8,18 @@ import {
   completeCurrentService,
   COUNTER_DEFS,
   emptyState,
+  holdCurrentCustomer,
   issueToken,
+  releaseHold,
   transferCustomer,
   type IssueTokenInput,
   type TransferResult,
 } from "./queue-logic"
 import { seedState } from "./seed"
-import type { Customer, QueueState } from "./types"
+import type { Customer, HoldReason, QueueState } from "./types"
 
-const STORAGE_KEY = "smart-bank-queue-v1"
+// v2 — counters gained priorityQueue/heldIds and journey steps gained holds
+const STORAGE_KEY = "smart-bank-queue-v2"
 
 export type DemoStatus = "idle" | "playing" | "paused"
 export type DemoSpeed = 0.5 | 1 | 2 | 4
@@ -36,6 +39,8 @@ interface QueueStore {
   callNext: (counterId: number) => Customer | null
   completeService: (counterId: number) => Customer
   transfer: (customerId: string, toCounterId: number) => TransferResult
+  holdCurrent: (counterId: number, reason: HoldReason) => Customer
+  release: (customerId: string) => Customer
   resetDemo: () => void
   clearAll: () => void
   playDemo: () => void
@@ -55,6 +60,14 @@ function loadFromStorage(): QueueState | null {
     const storedIds = parsed.state.counters.map((c) => c.id).join(",")
     const currentIds = COUNTER_DEFS.map((c) => c.id).join(",")
     if (storedIds !== currentIds) return null
+    // discard pre-hold state shapes (missing priority/hold structures)
+    if (
+      !parsed.state.counters.every(
+        (c) => Array.isArray(c.priorityQueue) && Array.isArray(c.heldIds)
+      )
+    ) {
+      return null
+    }
     return parsed.state
   } catch {
     return null
@@ -147,8 +160,38 @@ const DEMO_STEPS: DemoStep[] = [
     note: "Counter 1 calls T-104 — the system still knows he arrived first.",
     run: (s) => void s.callNext(1),
   },
+  // --- HOLD scenario: hold → held section → release → NEXT AFTER CURRENT ---
   {
-    note: "T-104's journey completes after 4 stops — fully traceable end to end.",
+    note: "A new customer arrives at Counter 1 while Ravi is being served — T-116 joins the normal FIFO queue.",
+    run: (s) =>
+      void s.issue({
+        name: "Vikram Singh",
+        serviceType: "Cash Withdrawal",
+        counterId: 1,
+      }),
+  },
+  {
+    note: "Ravi's document is missing — Counter 1 puts T-104 ON HOLD. He leaves active service but keeps his token and journey.",
+    run: (s) => void s.holdCurrent(1, "Document required"),
+  },
+  {
+    note: "Counter 1 calls the next customer — the HELD ticket is NOT part of FIFO, so T-116 is served instead.",
+    run: (s) => void s.callNext(1),
+  },
+  {
+    note: "Ravi's document arrives — the hold is RELEASED. T-104 becomes NEXT AFTER CURRENT, ahead of the normal FIFO queue.",
+    run: (s) => void s.release(byToken(s.state, "T-104").id),
+  },
+  {
+    note: "Counter 1 finishes serving T-116 — the current customer always completes first.",
+    run: (s) => void s.completeService(1),
+  },
+  {
+    note: "Counter 1 calls next — the released hold gives T-104 first precedence. His service resumes.",
+    run: (s) => void s.callNext(1),
+  },
+  {
+    note: "T-104's journey completes after 4 stops and one hold — fully traceable end to end.",
     run: (s) => void s.completeService(1),
   },
   {
@@ -307,6 +350,12 @@ export const useQueueStore = create<QueueStore>((set, get) => {
       mutate((draft) =>
         transferCustomer(draft, customerId, toCounterId, Date.now())
       ),
+
+    holdCurrent: (counterId, reason) =>
+      mutate((draft) => holdCurrentCustomer(draft, counterId, reason, Date.now())),
+
+    release: (customerId) =>
+      mutate((draft) => releaseHold(draft, customerId, Date.now())),
 
     resetDemo: () => {
       clearDemoTimer()

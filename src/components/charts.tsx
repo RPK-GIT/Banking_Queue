@@ -101,6 +101,69 @@ export function VBarChart({ data }: { data: ChartDatum[] }) {
   )
 }
 
+export interface GroupedBarDatum {
+  label: string
+  series: Array<{ name: string; value: number; color: string; display?: string }>
+}
+
+/**
+ * Grouped horizontal bars — one group per entity, one bar per series
+ * (e.g. Estimated Capacity vs Actual Processing per employee).
+ */
+export function GroupedBarChart({ data }: { data: GroupedBarDatum[] }) {
+  const max = Math.max(
+    1,
+    ...data.flatMap((d) => d.series.map((s) => s.value))
+  )
+  const seriesNames = data[0]?.series ?? []
+  return (
+    <div className="flex flex-col gap-2.5" role="img" aria-label="Grouped bar chart">
+      <div className="flex items-center gap-3 px-0.5">
+        {seriesNames.map((s) => (
+          <span key={s.name} className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <span
+              className="size-2 shrink-0 rounded-[3px]"
+              style={{ backgroundColor: s.color }}
+              aria-hidden
+            />
+            {s.name}
+          </span>
+        ))}
+      </div>
+      {data.map((group) => (
+        <div key={group.label} className="flex items-center gap-2">
+          <span className="w-28 shrink-0 truncate text-[11px] text-muted-foreground">
+            {group.label}
+          </span>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            {group.series.map((s) => (
+              <div
+                key={s.name}
+                className="flex items-center gap-2"
+                title={`${group.label} — ${s.name}: ${s.display ?? s.value}`}
+              >
+                <div className="h-2.5 min-w-0 flex-1">
+                  <div
+                    className="h-full rounded-r-[4px] transition-[width] duration-300"
+                    style={{
+                      width: `${(s.value / max) * 100}%`,
+                      minWidth: s.value > 0 ? 4 : 0,
+                      backgroundColor: s.color,
+                    }}
+                  />
+                </div>
+                <span className="w-14 shrink-0 text-right text-[10px] font-medium tabular-nums">
+                  {s.display ?? s.value}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function arcPath(
   cx: number,
   cy: number,

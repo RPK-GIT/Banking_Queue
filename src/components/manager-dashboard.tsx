@@ -1,17 +1,36 @@
 "use client"
 
 import { useState } from "react"
-import { ChartBar } from "lucide-react"
+import {
+  Activity,
+  ChartBar,
+  Clock,
+  FilterX,
+  Gauge,
+  ListChecks,
+  PauseCircle,
+  Timer,
+  UserRound,
+  ZoomIn,
+} from "lucide-react"
+import type { LucideIcon } from "lucide-react"
 
 import {
   ChartDatum,
   DataTable,
+  GroupedBarChart,
   HBarChart,
   RoundChart,
   seriesColor,
   TableColumn,
   VBarChart,
 } from "@/components/charts"
+import {
+  EmployeeDetailDialog,
+  ManagerDrilldownDialog,
+  type ManagerKpiId,
+} from "@/components/manager-drilldown"
+import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import {
   Select,
@@ -20,18 +39,37 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { counterMetrics, serviceTypeMetrics } from "@/lib/analytics"
+import {
+  DEFAULT_FILTERS,
+  employeeUtilization,
+  isFiltered,
+  managerKpis,
+  type ManagerFilters,
+} from "@/lib/analytics"
+import { TIME_RANGE_LABELS, type TimeRange } from "@/lib/capacity"
 import { formatDuration } from "@/lib/format"
+import { COUNTER_DEFS } from "@/lib/queue-logic"
 import { useQueueStore } from "@/lib/queue-store"
-import { SERVICE_TYPES } from "@/lib/types"
+import { useNow } from "@/hooks/use-now"
+import { SERVICE_TYPES, type ServiceType } from "@/lib/types"
 import { getVizPref, saveVizPref, type VizType } from "@/lib/viz-prefs"
+import { cn } from "@/lib/utils"
 
 const VIZ_LABELS: Record<VizType, string> = {
   "h-bar": "Horizontal Bar",
   "v-bar": "Vertical Bar",
+  "grouped-bar": "Grouped Bar",
   donut: "Donut",
   pie: "Pie",
   table: "Table",
+}
+
+type DataView = "actual" | "capacity" | "both"
+
+const DATA_VIEW_LABELS: Record<DataView, string> = {
+  actual: "Actual",
+  capacity: "Capacity",
+  both: "Actual vs Capacity",
 }
 
 /** remembers the chosen representation per chart (localStorage) */
@@ -49,6 +87,7 @@ function VizCard({
   chartId,
   defaultViz,
   options,
+  action,
   render,
 }: {
   title: string
@@ -56,6 +95,7 @@ function VizCard({
   defaultViz: VizType
   /** only representations that make sense for this metric */
   options: VizType[]
+  action?: React.ReactNode
   render: (viz: VizType) => React.ReactNode
 }) {
   const [viz, setViz] = useViz(chartId, defaultViz)
@@ -65,82 +105,166 @@ function VizCard({
         <h3 className="text-xs font-semibold tracking-wide uppercase">
           {title}
         </h3>
-        <Select value={viz} onValueChange={(v) => setViz(v as VizType)}>
-          <SelectTrigger
-            size="sm"
-            aria-label={`${title} — change visualization`}
-            className="h-6! gap-1 border-none bg-transparent px-1.5 text-[11px] text-muted-foreground shadow-none"
-          >
-            <ChartBar className="size-3" aria-hidden />
-            <SelectValue>
-              {() => <span>{VIZ_LABELS[viz]}</span>}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false} align="end">
-            {options.map((option) => (
-              <SelectItem key={option} value={option}>
-                {VIZ_LABELS[option]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-1">
+          {action}
+          <Select value={viz} onValueChange={(v) => setViz(v as VizType)}>
+            <SelectTrigger
+              size="sm"
+              aria-label={`${title} — change visualization`}
+              className="h-6! gap-1 border-none bg-transparent px-1.5 text-[11px] text-muted-foreground shadow-none"
+            >
+              <ChartBar className="size-3" aria-hidden />
+              <SelectValue>
+                {() => <span>{VIZ_LABELS[viz]}</span>}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false} align="end">
+              {options.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {VIZ_LABELS[option]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       <div className="min-h-32">{render(viz)}</div>
     </Card>
   )
 }
 
-const COUNTER_TABLE_COLUMNS: TableColumn[] = [
-  { key: "counter", label: "Counter" },
-  { key: "employee", label: "Employee" },
-  { key: "handled", label: "Tokens", align: "right" },
-  { key: "total", label: "Total time", align: "right" },
-  { key: "avg", label: "Avg time", align: "right" },
-  { key: "queue", label: "In queue", align: "right" },
-]
+interface KpiTile {
+  id: ManagerKpiId | "most-loaded"
+  label: string
+  value: string
+  sub?: string
+  icon: LucideIcon
+}
 
-export function ManagerDashboard() {
+export function ManagerDashboard({
+  onOpenJourney,
+}: {
+  onOpenJourney: (customerId: string) => void
+}) {
   const state = useQueueStore((s) => s.state)
-  const metrics = counterMetrics(state)
-  const services = serviceTypeMetrics(state)
+  const now = useNow(1000)
+  const [dataView, setDataView] = useState<DataView>("both")
+  const [filters, setFilters] = useState<ManagerFilters>(DEFAULT_FILTERS)
+  const [drilldown, setDrilldown] = useState<ManagerKpiId | null>(null)
+  const [employeeDetail, setEmployeeDetail] = useState<string | null>(null)
 
-  // color follows the entity: counter N always wears slot N-1
-  const workloadData: ChartDatum[] = metrics.map((m) => ({
-    label: `${m.employeeName} · C${m.counterId}`,
-    value: m.tokensHandled,
-    color: seriesColor(m.counterId - 1),
+  const utilization = employeeUtilization(state, now, filters)
+  const kpis = managerKpis(state, now, filters)
+
+  const setFilter = <K extends keyof ManagerFilters>(
+    key: K,
+    value: ManagerFilters[K]
+  ) => setFilters((f) => ({ ...f, [key]: value }))
+
+  // ---- chart data (all filtered, colors fixed per counter entity) ----
+  const workloadData: ChartDatum[] = utilization.map((u) => ({
+    label: `${u.employeeName} · C${u.counterId}`,
+    value: u.tokensHandled,
+    color: seriesColor(u.counterId - 1),
   }))
-  const activeTokensData: ChartDatum[] = metrics.map((m) => ({
-    label: `Counter ${m.counterId}`,
-    value: m.queueLength + (m.serving ? 1 : 0),
-    color: seriesColor(m.counterId - 1),
+  const activeTokensData: ChartDatum[] = utilization.map((u) => ({
+    label: `Counter ${u.counterId}`,
+    value: u.currentQueue + (u.serving ? 1 : 0) + u.currentlyHeld,
+    color: seriesColor(u.counterId - 1),
   }))
-  const processingData: ChartDatum[] = metrics.map((m) => ({
-    label: `Counter ${m.counterId}`,
-    value: Math.round(m.avgProcessingMs / 1000),
-    display: m.tokensCompleted > 0 ? formatDuration(m.avgProcessingMs) : "—",
-    color: seriesColor(m.counterId - 1),
+  const processingData: ChartDatum[] = utilization.map((u) => ({
+    label: `Counter ${u.counterId}`,
+    value: Math.round(
+      (dataView === "capacity" ? u.capacityMs : u.actualProcessingMs) / 1000
+    ),
+    display: formatDuration(
+      dataView === "capacity" ? u.capacityMs : u.actualProcessingMs
+    ),
+    color: seriesColor(u.counterId - 1),
   }))
-  const pressureData: ChartDatum[] = metrics.map((m) => ({
-    label: `Counter ${m.counterId}`,
-    value: m.queueLength,
-    color: seriesColor(m.counterId - 1),
+  const pressureData: ChartDatum[] = utilization.map((u) => ({
+    label: `Counter ${u.counterId}`,
+    value: u.currentQueue,
+    color: seriesColor(u.counterId - 1),
   }))
+
   // service types keep a FIXED slot by catalog order, never by rank
-  const serviceData: ChartDatum[] = services.map((s) => ({
-    label: s.serviceType,
-    value: s.customers,
-    color: seriesColor(SERVICE_TYPES.indexOf(s.serviceType as (typeof SERVICE_TYPES)[number])),
+  const filteredCustomers = Object.values(state.customers).filter(
+    (c) =>
+      (filters.service === "all" || c.serviceType === filters.service) &&
+      (filters.counter === "all" ||
+        c.currentCounterId === filters.counter ||
+        c.journey.some((s) => s.counterId === filters.counter))
+  )
+  const serviceCounts = new Map<string, number>()
+  for (const c of filteredCustomers) {
+    serviceCounts.set(c.serviceType, (serviceCounts.get(c.serviceType) ?? 0) + 1)
+  }
+  const serviceData: ChartDatum[] = [...serviceCounts.entries()]
+    .map(([serviceType, customers]) => ({
+      label: serviceType,
+      value: customers,
+      color: seriesColor(
+        SERVICE_TYPES.indexOf(serviceType as (typeof SERVICE_TYPES)[number])
+      ),
+    }))
+    .sort((a, b) => b.value - a.value)
+
+  const capacityComparisonData = utilization.map((u) => ({
+    label: `${u.employeeName} · C${u.counterId}`,
+    series: [
+      {
+        name: "Est. capacity",
+        value: Math.round(u.capacityMs / 1000),
+        display: formatDuration(u.capacityMs),
+        color: "#8a8987",
+      },
+      {
+        name: "Actual processing",
+        value: Math.round(u.actualProcessingMs / 1000),
+        display: formatDuration(u.actualProcessingMs),
+        color: seriesColor(u.counterId - 1),
+      },
+    ],
   }))
 
-  const counterRows = metrics.map((m) => ({
-    counter: `Counter ${m.counterId} — ${m.counterName}`,
-    employee: m.employeeName,
-    handled: m.tokensHandled,
-    total: formatDuration(m.totalProcessingMs),
-    avg: m.tokensCompleted > 0 ? formatDuration(m.avgProcessingMs) : "—",
-    queue: m.queueLength,
+  const counterRows = utilization.map((u) => ({
+    counter: `Counter ${u.counterId} — ${u.counterName}`,
+    employee: u.employeeName,
+    handled: u.tokensHandled,
+    total: formatDuration(u.actualProcessingMs),
+    avg: u.tokensProcessed > 0 ? formatDuration(u.avgProcessingMs) : "—",
+    queue: u.currentQueue,
   }))
+
+  const capacityRows = utilization.map((u) => ({
+    employee: u.employeeName,
+    counter: `Counter ${u.counterId}`,
+    capacity: formatDuration(u.capacityMs),
+    actual: formatDuration(u.actualProcessingMs),
+    utilization: `${Math.round(u.utilization * 100)}%`,
+    available: formatDuration(u.availableMs),
+    queue: u.currentQueue,
+  }))
+
+  const COUNTER_TABLE_COLUMNS: TableColumn[] = [
+    { key: "counter", label: "Counter" },
+    { key: "employee", label: "Employee" },
+    { key: "handled", label: "Tokens", align: "right" },
+    { key: "total", label: "Total time", align: "right" },
+    { key: "avg", label: "Avg time", align: "right" },
+    { key: "queue", label: "In queue", align: "right" },
+  ]
+
+  const CAPACITY_TABLE_COLUMNS: TableColumn[] = [
+    { key: "employee", label: "Employee" },
+    { key: "counter", label: "Counter" },
+    { key: "capacity", label: "Est. capacity", align: "right" },
+    { key: "actual", label: "Actual", align: "right" },
+    { key: "utilization", label: "Utilization", align: "right" },
+    { key: "available", label: "Available", align: "right" },
+    { key: "queue", label: "Queue", align: "right" },
+  ]
 
   function renderCounterChart(viz: VizType, data: ChartDatum[]) {
     switch (viz) {
@@ -151,25 +275,290 @@ export function ManagerDashboard() {
       case "donut":
       case "pie":
         return <RoundChart data={data} variant={viz} centerLabel="total" />
+      case "grouped-bar":
+        return <GroupedBarChart data={capacityComparisonData} />
       case "table":
         return <DataTable columns={COUNTER_TABLE_COLUMNS} rows={counterRows} />
     }
   }
+
+  // ---- KPI tiles — every one drills down into the records behind it ----
+  const tiles: KpiTile[] = [
+    {
+      id: "tokens-processed",
+      label: "Tokens Processed",
+      value: String(kpis.tokensProcessed),
+      sub: `${kpis.tokensOnHold > 0 ? `${kpis.tokensOnHold} on hold · ` : ""}${TIME_RANGE_LABELS[filters.time]}`,
+      icon: ListChecks,
+    },
+    {
+      id: "active-tokens",
+      label: "Active Tokens",
+      value: String(kpis.activeTokens),
+      icon: Activity,
+    },
+    {
+      id: "total-processing",
+      label:
+        dataView === "capacity" ? "Est. Capacity (branch)" : "Total Processing",
+      value:
+        dataView === "capacity"
+          ? formatDuration(kpis.branchCapacityMs)
+          : formatDuration(kpis.totalProcessingMs),
+      sub:
+        dataView === "both"
+          ? `of ${formatDuration(kpis.branchCapacityMs)} capacity`
+          : dataView === "capacity"
+            ? "Estimated Capacity"
+            : "hold time excluded",
+      icon: Clock,
+    },
+    {
+      id: "avg-service",
+      label: "Avg Service Time",
+      value: kpis.tokensProcessed > 0 ? formatDuration(kpis.avgServiceMs) : "—",
+      icon: Timer,
+    },
+    {
+      id: "most-loaded",
+      label: "Most Loaded",
+      value: kpis.mostLoaded?.employeeName ?? "—",
+      sub: kpis.mostLoaded
+        ? formatDuration(kpis.mostLoaded.actualProcessingMs)
+        : undefined,
+      icon: UserRound,
+    },
+    {
+      id: "utilization",
+      label: "Branch Utilization",
+      value: `${Math.round(kpis.utilization * 100)}%`,
+      sub:
+        dataView !== "actual"
+          ? `${formatDuration(kpis.branchAvailableMs)} available`
+          : "vs Estimated Capacity",
+      icon: Gauge,
+    },
+  ]
 
   return (
     <section
       aria-label="Manager dashboard"
       className="flex min-h-0 flex-1 flex-col gap-2"
     >
-      <div className="flex shrink-0 items-baseline justify-between px-0.5">
+      {/* header: title + global Data View */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-0.5">
         <h2 className="text-sm font-semibold tracking-tight">
           Manager Dashboard
         </h2>
-        <p className="text-[11px] text-muted-foreground">
-          Live branch performance — four counters, four employees
-        </p>
+        <div
+          role="group"
+          aria-label="Data View"
+          className="flex items-center gap-1"
+        >
+          <span className="mr-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+            Data View
+          </span>
+          {(Object.keys(DATA_VIEW_LABELS) as DataView[]).map((view) => (
+            <button
+              key={view}
+              type="button"
+              onClick={() => setDataView(view)}
+              aria-pressed={dataView === view}
+              className={cn(
+                "rounded-md border px-2 py-1 text-[11px] font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                dataView === view
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:bg-muted"
+              )}
+            >
+              {DATA_VIEW_LABELS[view]}
+            </button>
+          ))}
+        </div>
       </div>
+
+      {/* dashboard-wide filters — every KPI, table and visualization follows */}
+      <div
+        aria-label="Analytics filters"
+        className="flex shrink-0 flex-wrap items-center gap-1.5 rounded-lg border bg-card px-2 py-1.5"
+      >
+        <Select
+          value={filters.time}
+          onValueChange={(v) => setFilter("time", v as TimeRange)}
+        >
+          <SelectTrigger size="sm" aria-label="Time filter" className="h-6! px-2 text-[11px]">
+            <SelectValue>{() => <span>{TIME_RANGE_LABELS[filters.time]}</span>}</SelectValue>
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            {(Object.keys(TIME_RANGE_LABELS) as TimeRange[]).map((t) => (
+              <SelectItem key={t} value={t}>
+                {TIME_RANGE_LABELS[t]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={filters.employee}
+          onValueChange={(v) => setFilter("employee", v as string)}
+        >
+          <SelectTrigger size="sm" aria-label="Employee filter" className="h-6! px-2 text-[11px]">
+            <SelectValue>
+              {() => (
+                <span>
+                  {filters.employee === "all" ? "All employees" : filters.employee}
+                </span>
+              )}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            <SelectItem value="all">All employees</SelectItem>
+            {COUNTER_DEFS.map((c) => (
+              <SelectItem key={c.id} value={c.employeeName}>
+                {c.employeeName}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={String(filters.counter)}
+          onValueChange={(v) =>
+            setFilter("counter", v === "all" ? "all" : Number(v))
+          }
+        >
+          <SelectTrigger size="sm" aria-label="Counter filter" className="h-6! px-2 text-[11px]">
+            <SelectValue>
+              {() => (
+                <span>
+                  {filters.counter === "all"
+                    ? "All counters"
+                    : `Counter ${filters.counter}`}
+                </span>
+              )}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            <SelectItem value="all">All counters</SelectItem>
+            {COUNTER_DEFS.map((c) => (
+              <SelectItem key={c.id} value={String(c.id)}>
+                Counter {c.id} — {c.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={filters.service}
+          onValueChange={(v) => setFilter("service", v as ServiceType | "all")}
+        >
+          <SelectTrigger size="sm" aria-label="Service type filter" className="h-6! px-2 text-[11px]">
+            <SelectValue>
+              {() => (
+                <span>
+                  {filters.service === "all" ? "All services" : filters.service}
+                </span>
+              )}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            <SelectItem value="all">All services</SelectItem>
+            {SERVICE_TYPES.map((s) => (
+              <SelectItem key={s} value={s}>
+                {s}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {isFiltered(filters) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-[11px] text-muted-foreground"
+            onClick={() => setFilters(DEFAULT_FILTERS)}
+          >
+            <FilterX data-icon="inline-start" aria-hidden />
+            Clear Filters
+          </Button>
+        )}
+        <span className="ml-auto text-[10px] text-muted-foreground">
+          {dataView !== "actual" && "Capacity figures are Estimated Capacity — prototype assumptions"}
+        </span>
+      </div>
+
+      {/* KPI row — click any KPI to see the records behind the number */}
+      <div className="grid shrink-0 grid-cols-6 divide-x rounded-xl border bg-card shadow-xs">
+        {tiles.map((tile) => (
+          <button
+            key={tile.id}
+            type="button"
+            onClick={() =>
+              tile.id === "most-loaded"
+                ? kpis.mostLoaded &&
+                  setEmployeeDetail(kpis.mostLoaded.employeeName)
+                : setDrilldown(tile.id)
+            }
+            aria-label={`${tile.label} — drill down`}
+            title="Click to drill down"
+            className="group flex min-w-0 items-center gap-2 px-2.5 py-2 text-left transition-colors outline-none first:rounded-l-xl last:rounded-r-xl hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset"
+          >
+            <tile.icon className="size-4 shrink-0 text-primary/70" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm leading-5 font-semibold tabular-nums tracking-tight">
+                {tile.value}
+              </p>
+              <p className="truncate text-[10px] leading-3 text-muted-foreground">
+                {tile.label}
+              </p>
+              {tile.sub && (
+                <p className="truncate text-[9px] leading-3 text-muted-foreground/70">
+                  {tile.sub}
+                </p>
+              )}
+            </div>
+            <ZoomIn
+              className="size-3 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground/70 group-focus-visible:text-muted-foreground/70"
+              aria-hidden
+            />
+          </button>
+        ))}
+      </div>
+
       <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-1 gap-3 overflow-y-auto pb-1 lg:grid-cols-2">
+        {dataView !== "actual" && (
+          <VizCard
+            title={
+              dataView === "capacity"
+                ? "Estimated Capacity by Employee"
+                : "Capacity vs Actual"
+            }
+            chartId="capacity-vs-actual"
+            defaultViz="grouped-bar"
+            options={["grouped-bar", "h-bar", "table"]}
+            render={(viz) =>
+              viz === "table" ? (
+                <DataTable columns={CAPACITY_TABLE_COLUMNS} rows={capacityRows} />
+              ) : viz === "grouped-bar" ? (
+                <GroupedBarChart data={capacityComparisonData} />
+              ) : (
+                <HBarChart
+                  data={utilization.map((u) => ({
+                    label: `${u.employeeName} · C${u.counterId}`,
+                    value: Math.round(
+                      (dataView === "capacity" ? u.availableMs : u.actualProcessingMs) / 1000
+                    ),
+                    display:
+                      dataView === "capacity"
+                        ? `${formatDuration(u.availableMs)} free`
+                        : `${Math.round(u.utilization * 100)}%`,
+                    color: seriesColor(u.counterId - 1),
+                  }))}
+                />
+              )
+            }
+          />
+        )}
         <VizCard
           title="Employee Workload"
           chartId="employee-workload"
@@ -189,9 +578,9 @@ export function ManagerDashboard() {
                   { key: "counter", label: "Counter" },
                   { key: "active", label: "Active tokens", align: "right" },
                 ]}
-                rows={metrics.map((m) => ({
-                  counter: `Counter ${m.counterId} — ${m.counterName}`,
-                  active: m.queueLength + (m.serving ? 1 : 0),
+                rows={utilization.map((u) => ({
+                  counter: `Counter ${u.counterId} — ${u.counterName}`,
+                  active: u.currentQueue + (u.serving ? 1 : 0) + u.currentlyHeld,
                 }))}
               />
             ) : viz === "donut" || viz === "pie" ? (
@@ -204,13 +593,22 @@ export function ManagerDashboard() {
           }
         />
         <VizCard
-          title="Processing Time"
+          title={
+            dataView === "capacity"
+              ? "Est. Capacity (Processing Window)"
+              : "Processing Time"
+          }
           chartId="processing-time"
           defaultViz="h-bar"
           options={["h-bar", "v-bar", "table"]}
           render={(viz) =>
             viz === "table" ? (
-              <DataTable columns={COUNTER_TABLE_COLUMNS} rows={counterRows} />
+              <DataTable
+                columns={
+                  dataView === "actual" ? COUNTER_TABLE_COLUMNS : CAPACITY_TABLE_COLUMNS
+                }
+                rows={dataView === "actual" ? counterRows : capacityRows}
+              />
             ) : viz === "h-bar" ? (
               <HBarChart data={processingData} />
             ) : (
@@ -229,10 +627,12 @@ export function ManagerDashboard() {
                 columns={[
                   { key: "counter", label: "Counter" },
                   { key: "waiting", label: "Waiting", align: "right" },
+                  { key: "held", label: "On hold", align: "right" },
                 ]}
-                rows={metrics.map((m) => ({
-                  counter: `Counter ${m.counterId} — ${m.counterName}`,
-                  waiting: m.queueLength,
+                rows={utilization.map((u) => ({
+                  counter: `Counter ${u.counterId} — ${u.counterName}`,
+                  waiting: u.currentQueue,
+                  held: u.currentlyHeld,
                 }))}
               />
             ) : viz === "h-bar" ? (
@@ -246,7 +646,7 @@ export function ManagerDashboard() {
           title="Service Type Analysis"
           chartId="service-types"
           defaultViz="h-bar"
-          options={["h-bar", "v-bar", "donut", "table"]}
+          options={["h-bar", "v-bar", "donut", "pie", "table"]}
           render={(viz) =>
             viz === "table" ? (
               <DataTable
@@ -254,13 +654,13 @@ export function ManagerDashboard() {
                   { key: "service", label: "Service" },
                   { key: "customers", label: "Customers", align: "right" },
                 ]}
-                rows={services.map((s) => ({
-                  service: s.serviceType,
-                  customers: s.customers,
+                rows={serviceData.map((s) => ({
+                  service: s.label,
+                  customers: s.value,
                 }))}
               />
-            ) : viz === "donut" ? (
-              <RoundChart data={serviceData} variant="donut" centerLabel="customers" />
+            ) : viz === "donut" || viz === "pie" ? (
+              <RoundChart data={serviceData} variant={viz} centerLabel="customers" />
             ) : viz === "h-bar" ? (
               <HBarChart data={serviceData} />
             ) : (
@@ -268,7 +668,68 @@ export function ManagerDashboard() {
             )
           }
         />
+        <VizCard
+          title="Hold Activity"
+          chartId="hold-activity"
+          defaultViz="h-bar"
+          options={["h-bar", "table"]}
+          action={
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-1.5 text-[11px] text-muted-foreground"
+              onClick={() => setDrilldown("holds")}
+            >
+              <PauseCircle data-icon="inline-start" aria-hidden />
+              Details
+            </Button>
+          }
+          render={(viz) => {
+            const holdData: ChartDatum[] = utilization.map((u) => ({
+              label: `${u.employeeName} · C${u.counterId}`,
+              value: Math.round(u.holdMs / 1000),
+              display: u.holdMs > 0 ? formatDuration(u.holdMs) : "0",
+              color: seriesColor(u.counterId - 1),
+            }))
+            if (viz === "table") {
+              return (
+                <DataTable
+                  columns={[
+                    { key: "employee", label: "Employee" },
+                    { key: "events", label: "Hold events", align: "right" },
+                    { key: "total", label: "Total hold", align: "right" },
+                    { key: "held", label: "On hold now", align: "right" },
+                  ]}
+                  rows={utilization.map((u) => ({
+                    employee: `${u.employeeName} — C${u.counterId}`,
+                    events: u.holdEvents,
+                    total: u.holdMs > 0 ? formatDuration(u.holdMs) : "—",
+                    held: u.currentlyHeld,
+                  }))}
+                />
+              )
+            }
+            return <HBarChart data={holdData} />
+          }}
+        />
       </div>
+
+      <ManagerDrilldownDialog
+        kpi={drilldown}
+        filters={filters}
+        onClose={() => setDrilldown(null)}
+        onOpenEmployee={(name) => {
+          setDrilldown(null)
+          setEmployeeDetail(name)
+        }}
+        onOpenJourney={onOpenJourney}
+      />
+      <EmployeeDetailDialog
+        employeeName={employeeDetail}
+        filters={filters}
+        onClose={() => setEmployeeDetail(null)}
+        onOpenJourney={onOpenJourney}
+      />
     </section>
   )
 }

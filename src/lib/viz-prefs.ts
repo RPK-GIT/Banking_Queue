@@ -6,6 +6,7 @@
 export type VizType =
   | "h-bar"
   | "v-bar"
+  | "grouped-bar"
   | "donut"
   | "pie"
   | "table"
