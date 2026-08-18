@@ -29,7 +29,7 @@ concept in about a minute.
 
 ```bash
 npm install
-npm run dev       # open http://localhost:3000
+npm run dev       # open http://localhost:3005
 ```
 
 Other commands:

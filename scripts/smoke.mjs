@@ -11,7 +11,7 @@ page.on("console", (msg) => {
 })
 page.on("pageerror", (err) => errors.push(String(err)))
 
-const url = process.env.APP_URL ?? "http://localhost:3001"
+const url = process.env.APP_URL ?? "http://localhost:3005"
 await page.goto(url, { waitUntil: "domcontentloaded" })
 await page.waitForSelector("text=Smart Bank Queue", { timeout: 30000 })
 await page.waitForSelector("text=Counter 5", { timeout: 30000 })
