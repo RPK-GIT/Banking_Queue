@@ -41,6 +41,18 @@ export interface HoldRecord {
   resumedAt: number | null
 }
 
+/**
+ * One employee-break pause inside a service step — the customer keeps their
+ * exact service position while the employee is away. Break time is never
+ * counted as active processing time.
+ */
+export interface BreakRecord {
+  /** epoch ms — when the employee's break paused this service */
+  startedAt: number
+  /** epoch ms — when the employee returned and service resumed */
+  endedAt: number | null
+}
+
 export interface JourneyStep {
   counterId: number
   counterName: string
@@ -53,6 +65,8 @@ export interface JourneyStep {
   status: JourneyStepStatus
   /** hold episodes at this counter, oldest first */
   holds: HoldRecord[]
+  /** employee-break pauses while this step was being served, oldest first */
+  breaks: BreakRecord[]
 }
 
 export interface Customer {
@@ -73,25 +87,37 @@ export interface Customer {
   completedAt: number | null
 }
 
-export type CounterStatus = "available" | "serving"
+export type CounterStatus = "available" | "serving" | "on-break"
 
+/**
+ * Journey-aware FIFO — each counter holds THREE ordered waiting tiers,
+ * always consumed top-down, strictly FIFO within each tier:
+ *
+ *   1. releasedQueue  — NEXT AFTER CURRENT: released holds, in release order
+ *   2. priorityQueue  — JOURNEY IN PROGRESS: customers whose journey already
+ *                       started elsewhere, in arrival order at THIS counter
+ *   3. queue          — NEW REQUESTS: journeys that have never started
+ *
+ * ON HOLD customers live outside all tiers; EMPLOYEE BREAK is counter state.
+ */
 export interface Counter {
   id: number
   number: number
   name: string
   employeeName: string
   status: CounterStatus
+  /** kept during an employee break — the paused customer's service resumes */
   currentCustomerId: string | null
-  /** customer ids in strict FIFO order — index 0 is served next */
+  /** NEW REQUESTS — journeys never started; strict FIFO */
   queue: string[]
-  /**
-   * released-from-hold customers, in release order — served BEFORE the normal
-   * FIFO queue ("next after current"). They already started service, so a
-   * release restores their priority rather than sending them to the back.
-   */
+  /** JOURNEY IN PROGRESS — started elsewhere; FIFO by arrival at this counter */
   priorityQueue: string[]
+  /** NEXT AFTER CURRENT — released holds; FIFO by release time */
+  releasedQueue: string[]
   /** customers currently ON HOLD at this counter — outside FIFO entirely */
   heldIds: string[]
+  /** employee break log, oldest first — open break = last entry, endedAt null */
+  breaks: BreakRecord[]
 }
 
 export type ActivityType =
@@ -102,6 +128,8 @@ export type ActivityType =
   | "journey-completed"
   | "held"
   | "hold-released"
+  | "break-started"
+  | "break-ended"
   | "reset"
 
 export interface Activity {

@@ -8,18 +8,20 @@ import {
   completeCurrentService,
   COUNTER_DEFS,
   emptyState,
+  endBreak,
   holdCurrentCustomer,
   issueToken,
   releaseHold,
+  startBreak,
   transferCustomer,
   type IssueTokenInput,
   type TransferResult,
 } from "./queue-logic"
 import { seedState } from "./seed"
-import type { Customer, HoldReason, QueueState } from "./types"
+import type { Counter, Customer, HoldReason, QueueState } from "./types"
 
-// v2 — counters gained priorityQueue/heldIds and journey steps gained holds
-const STORAGE_KEY = "smart-bank-queue-v2"
+// v3 — journey-aware FIFO tiers (releasedQueue) and employee breaks
+const STORAGE_KEY = "smart-bank-queue-v3"
 
 export type DemoStatus = "idle" | "playing" | "paused"
 export type DemoSpeed = 0.5 | 1 | 2 | 4
@@ -41,6 +43,8 @@ interface QueueStore {
   transfer: (customerId: string, toCounterId: number) => TransferResult
   holdCurrent: (counterId: number, reason: HoldReason) => Customer
   release: (customerId: string) => Customer
+  beginBreak: (counterId: number) => Counter
+  finishBreak: (counterId: number) => Counter
   resetDemo: () => void
   clearAll: () => void
   playDemo: () => void
@@ -60,10 +64,14 @@ function loadFromStorage(): QueueState | null {
     const storedIds = parsed.state.counters.map((c) => c.id).join(",")
     const currentIds = COUNTER_DEFS.map((c) => c.id).join(",")
     if (storedIds !== currentIds) return null
-    // discard pre-hold state shapes (missing priority/hold structures)
+    // discard pre-journey-aware state shapes (missing tier/break structures)
     if (
       !parsed.state.counters.every(
-        (c) => Array.isArray(c.priorityQueue) && Array.isArray(c.heldIds)
+        (c) =>
+          Array.isArray(c.priorityQueue) &&
+          Array.isArray(c.releasedQueue) &&
+          Array.isArray(c.heldIds) &&
+          Array.isArray(c.breaks)
       )
     ) {
       return null
@@ -97,9 +105,19 @@ function byToken(state: QueueState, token: string): Customer {
 
 const DEMO_TOKEN = "T-115" // first token issued after the seeded scenario
 
+/**
+ * Live Demo — walks through the journey-aware queue engine end to end:
+ *   A  completion auto-assigns the next eligible customer (no Call Next)
+ *   B  a journey-started transfer enters the PRIORITY queue ahead of new ones
+ *   C  putting a customer on hold auto-assigns the next eligible customer
+ *   D  releasing a hold creates NEXT AFTER CURRENT, served on completion
+ *   E  an employee break pauses the current service, counter ON BREAK
+ *   F  returning from break resumes the SAME customer (same timer)
+ *   G  completing after the break auto-assigns the next eligible customer
+ */
 const DEMO_STEPS: DemoStep[] = [
   {
-    note: `A new customer walks in — the teller issues token ${DEMO_TOKEN}. Aisha joins the END of Counter 1's queue.`,
+    note: `A new customer walks in — token ${DEMO_TOKEN}. Aisha joins Counter 1's NEW REQUESTS queue (her journey hasn't started).`,
     run: (s) =>
       void s.issue({
         name: "Aisha Khan",
@@ -109,60 +127,47 @@ const DEMO_STEPS: DemoStep[] = [
       }),
   },
   {
-    note: "Counter 1 finishes its current customer.",
+    note: "SCENARIO A — Counter 1 completes T-106. The next eligible customer (T-114) is assigned AUTOMATICALLY — no Call Next needed.",
     run: (s) => void s.completeService(1),
   },
   {
-    note: "Counter 1 calls the next in line — strict FIFO, no jumping.",
-    run: (s) => void s.callNext(1),
-  },
-  {
-    note: "Counter 1 finishes serving.",
+    note: `Counter 1 completes T-114 — ${DEMO_TOKEN} is automatically assigned next.`,
     run: (s) => void s.completeService(1),
   },
   {
-    note: `${DEMO_TOKEN} is now first in line — Counter 1 calls Aisha.`,
-    run: (s) => void s.callNext(1),
-  },
-  {
-    note: `Counter 1 finishes its part and transfers ${DEMO_TOKEN} to Counter 4 — she joins the END of that queue. Watch her WhatsApp update.`,
+    note: `SCENARIO B — ${DEMO_TOKEN}'s journey has STARTED, so transferring her to busy Counter 4 places her in JOURNEY IN PROGRESS — ahead of new request T-109.`,
     run: (s) => void s.transfer(byToken(s.state, DEMO_TOKEN).id, 4),
   },
   {
-    note: "Counter 4 calls its first waiting customer — strict FIFO.",
-    run: (s) => void s.callNext(4),
-  },
-  {
-    note: "Counter 4 finishes serving.",
+    note: `Counter 4 completes T-107 — ${DEMO_TOKEN} (journey in progress) is auto-assigned BEFORE T-109, who arrived earlier but never started.`,
     run: (s) => void s.completeService(4),
   },
   {
-    note: "Counter 4 calls the next customer — those already waiting keep their priority.",
-    run: (s) => void s.callNext(4),
-  },
-  {
-    note: "Counter 4 finishes serving.",
-    run: (s) => void s.completeService(4),
-  },
-  {
-    note: `${DEMO_TOKEN} reaches the front — Counter 4 calls Aisha.`,
-    run: (s) => void s.callNext(4),
-  },
-  {
-    note: `Counter 4 transfers ${DEMO_TOKEN} to Counter 3 — same token, full journey preserved.`,
+    note: `${DEMO_TOKEN} moves on to Counter 3 — journey priority again. Freed Counter 4 automatically pulls T-109 in.`,
     run: (s) => void s.transfer(byToken(s.state, DEMO_TOKEN).id, 3),
   },
   {
-    note: "Ravi (T-104) is transferred back to Counter 1 — his 4th stop, one continuous journey.",
+    note: "SCENARIO C — Ravi's (T-104) document is missing: Counter 3 puts him ON HOLD. The next eligible customer (Aisha) starts AUTOMATICALLY.",
+    run: (s) => void s.holdCurrent(3, "Document required"),
+  },
+  {
+    note: "SCENARIO D — Ravi's document arrives: the hold is RELEASED. T-104 becomes NEXT AFTER CURRENT — ahead of every queue, without interrupting Aisha.",
+    run: (s) => void s.release(byToken(s.state, "T-104").id),
+  },
+  {
+    note: `Counter 3 completes ${DEMO_TOKEN}'s 3-stop journey — released hold T-104 is served next, before the waiting queue.`,
+    run: (s) => void s.completeService(3),
+  },
+  {
+    note: "Ravi transfers to IDLE Counter 1 — no artificial wait, he is serving immediately. Counter 3 auto-assigns T-110.",
     run: (s) => void s.transfer(byToken(s.state, "T-104").id, 1),
   },
   {
-    note: "Counter 1 calls T-104 — the system still knows he arrived first.",
-    run: (s) => void s.callNext(1),
+    note: "SCENARIO E — Priya starts a ☕ break while serving Ravi. His service PAUSES (keeping his place); Counter 1 is ON BREAK.",
+    run: (s) => void s.beginBreak(1),
   },
-  // --- HOLD scenario: hold → held section → release → NEXT AFTER CURRENT ---
   {
-    note: "A new customer arrives at Counter 1 while Ravi is being served — T-116 joins the normal FIFO queue.",
+    note: "T-116 arrives at Counter 1 — he WAITS. No customer is auto-assigned while the employee is on break.",
     run: (s) =>
       void s.issue({
         name: "Vikram Singh",
@@ -171,42 +176,27 @@ const DEMO_STEPS: DemoStep[] = [
       }),
   },
   {
-    note: "Ravi's document is missing — Counter 1 puts T-104 ON HOLD. He leaves active service but keeps his token and journey.",
-    run: (s) => void s.holdCurrent(1, "Document required"),
+    note: "SCENARIO F — Priya returns. Ravi's service RESUMES exactly where it paused — same timer, same priority, not Vikram.",
+    run: (s) => void s.finishBreak(1),
   },
   {
-    note: "Counter 1 calls the next customer — the HELD ticket is NOT part of FIFO, so T-116 is served instead.",
-    run: (s) => void s.callNext(1),
-  },
-  {
-    note: "Ravi's document arrives — the hold is RELEASED. T-104 becomes NEXT AFTER CURRENT, ahead of the normal FIFO queue.",
-    run: (s) => void s.release(byToken(s.state, "T-104").id),
-  },
-  {
-    note: "Counter 1 finishes serving T-116 — the current customer always completes first.",
+    note: "SCENARIO G — T-104 completes: 4 stops, one hold, one break — fully traceable. T-116 is auto-assigned next.",
     run: (s) => void s.completeService(1),
   },
   {
-    note: "Counter 1 calls next — the released hold gives T-104 first precedence. His service resumes.",
-    run: (s) => void s.callNext(1),
+    note: "Counter 4 completes T-109 — queue empty, counter idles.",
+    run: (s) => void s.completeService(4),
   },
   {
-    note: "T-104's journey completes after 4 stops and one hold — fully traceable end to end.",
+    note: "Counter 3 completes T-110 — T-112 auto-assigned.",
+    run: (s) => void s.completeService(3),
+  },
+  {
+    note: "Counter 1 completes T-116 — the branch keeps flowing without a single manual Call Next.",
     run: (s) => void s.completeService(1),
   },
   {
-    note: "Counter 3 keeps serving its queue in order.",
-    run: (s) => void s.callNext(3),
-  },
-  { note: "Counter 3 finishes serving.", run: (s) => void s.completeService(3) },
-  { note: "Counter 3 calls the next customer.", run: (s) => void s.callNext(3) },
-  { note: "Counter 3 finishes serving.", run: (s) => void s.completeService(3) },
-  {
-    note: `${DEMO_TOKEN} is finally served at Counter 3.`,
-    run: (s) => void s.callNext(3),
-  },
-  {
-    note: `${DEMO_TOKEN}'s journey completes — fair, transparent and FIFO throughout.`,
+    note: "Counter 3 completes T-112 — journey-aware FIFO, automatic assignment, holds and breaks all demonstrated.",
     run: (s) => void s.completeService(3),
   },
 ]
@@ -356,6 +346,12 @@ export const useQueueStore = create<QueueStore>((set, get) => {
 
     release: (customerId) =>
       mutate((draft) => releaseHold(draft, customerId, Date.now())),
+
+    beginBreak: (counterId) =>
+      mutate((draft) => startBreak(draft, counterId, Date.now())),
+
+    finishBreak: (counterId) =>
+      mutate((draft) => endBreak(draft, counterId, Date.now())),
 
     resetDemo: () => {
       clearDemoTimer()

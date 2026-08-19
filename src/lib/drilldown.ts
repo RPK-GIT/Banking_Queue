@@ -1,5 +1,5 @@
 import { customerTotals, stepProcessingMs } from "./durations"
-import { isPriority, queuePosition } from "./queue-logic"
+import { queuePosition, waitingTier, type WaitingTier } from "./queue-logic"
 import type { Customer, CustomerStatus, QueueState } from "./types"
 import { ESTIMATED_MINUTES_PER_CUSTOMER } from "./whatsapp"
 
@@ -18,6 +18,8 @@ export interface ActiveCustomerRow {
   status: CustomerStatus
   /** true when waiting with restored priority after a hold release */
   priority: boolean
+  /** which waiting tier the customer occupies (null unless waiting) */
+  tier: WaitingTier | null
   /** 1-based position in the counter's line, null unless waiting */
   position: number | null
   /** time since entering the current counter's queue (waiting) */
@@ -33,6 +35,7 @@ function toActiveRow(
   const step = customer.journey[customer.journey.length - 1]
   const position =
     customer.status === "waiting" ? queuePosition(state, customer.id) : null
+  const tier = waitingTier(state, customer.id)
   return {
     customerId: customer.id,
     token: customer.token,
@@ -40,7 +43,8 @@ function toActiveRow(
     serviceType: customer.serviceType,
     counterId: customer.currentCounterId,
     status: customer.status,
-    priority: isPriority(state, customer.id),
+    priority: tier === "released",
+    tier,
     position,
     waitingMs: Math.max(0, now - step.enteredAt),
     estWaitMin:
@@ -121,6 +125,7 @@ export interface CompletedRow {
   journeyMs: number
   processingMs: number
   holdMs: number
+  breakMs: number
   completedAt: number
 }
 
@@ -139,6 +144,7 @@ export function completedRows(state: QueueState, now: number): CompletedRow[] {
         journeyMs: totals.journeyMs,
         processingMs: totals.processingMs,
         holdMs: totals.holdMs,
+        breakMs: totals.breakMs,
         completedAt: c.completedAt!,
       }
     })

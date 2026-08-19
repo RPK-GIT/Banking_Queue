@@ -15,12 +15,14 @@ import {
 } from "./analytics"
 import { demoWindowMs, employeeCapacityMs } from "./capacity"
 import {
-  callNextCustomer,
   completeCurrentService,
   emptyState,
+  endBreak,
   holdCurrentCustomer,
   issueToken,
   releaseHold,
+  startBreak,
+  waitingCount,
 } from "./queue-logic"
 import { seedState } from "./seed"
 
@@ -45,7 +47,7 @@ describe("manager analytics (derived from canonical queue state)", () => {
     const metrics = counterMetrics(state)
     for (const metric of metrics) {
       const counter = state.counters.find((c) => c.id === metric.counterId)!
-      expect(metric.queueLength).toBe(counter.queue.length)
+      expect(metric.queueLength).toBe(waitingCount(counter))
       expect(metric.serving).toBe(counter.currentCustomerId !== null)
     }
   })
@@ -152,19 +154,18 @@ describe("manager filters (time / employee / counter / service)", () => {
   it("time filter drops records that started outside the window", () => {
     const state = emptyState()
     // one step started 500 minutes ago — outside Today's 435-minute window
+    // (issuing to an idle counter starts service automatically)
     issueToken(
       state,
       { name: "Old", serviceType: "Cash Deposit", counterId: 1 },
       NOW - 500 * MIN
     )
-    callNextCustomer(state, 1, NOW - 500 * MIN)
     completeCurrentService(state, 1, NOW - 490 * MIN)
     issueToken(
       state,
       { name: "Recent", serviceType: "Cash Deposit", counterId: 1 },
       NOW - 10 * MIN
     )
-    callNextCustomer(state, 1, NOW - 10 * MIN)
 
     const all = stepRecords(state, NOW)
     expect(all).toHaveLength(2)
@@ -229,12 +230,10 @@ describe("hold metrics in manager analytics", () => {
     const c = issueToken(
       state,
       { name: "Held", serviceType: "KYC Update", counterId: 1 },
-      NOW - 30 * MIN
+      NOW - 30 * MIN // idle counter → serving immediately
     )
-    callNextCustomer(state, 1, NOW - 30 * MIN)
     holdCurrentCustomer(state, 1, "Document required", NOW - 25 * MIN)
-    releaseHold(state, c.id, NOW - 15 * MIN)
-    callNextCustomer(state, 1, NOW - 15 * MIN)
+    releaseHold(state, c.id, NOW - 15 * MIN) // idle → resumes immediately
     completeCurrentService(state, 1, NOW - 10 * MIN)
     return state
   }
@@ -256,9 +255,8 @@ describe("hold metrics in manager analytics", () => {
     issueToken(
       state,
       { name: "Now Held", serviceType: "Other", counterId: 2 },
-      NOW - 5 * MIN
+      NOW - 5 * MIN // serving immediately
     )
-    callNextCustomer(state, 2, NOW - 5 * MIN)
     holdCurrentCustomer(state, 2, "System issue", NOW - MIN)
     expect(managerKpis(state, NOW).tokensOnHold).toBe(1)
   })
@@ -275,5 +273,41 @@ describe("hold metrics in manager analytics", () => {
     expect(averages).toEqual([
       { serviceType: "KYC Update", completed: 1, avgProcessingMs: 10 * MIN },
     ])
+  })
+})
+
+describe("employee break metrics in manager analytics", () => {
+  it("separates processing, hold and break time (never double-counted)", () => {
+    const state = emptyState()
+    issueToken(
+      state,
+      { name: "Pausee", serviceType: "Cash Deposit", counterId: 1 },
+      NOW - 20 * MIN // serving immediately
+    )
+    startBreak(state, 1, NOW - 15 * MIN)
+    endBreak(state, 1, NOW - 5 * MIN) // 10-minute break
+    completeCurrentService(state, 1, NOW)
+
+    const [record] = stepRecords(state, NOW)
+    expect(record.breakMs).toBe(10 * MIN)
+    expect(record.processingMs).toBe(10 * MIN) // 20m elapsed − 10m break
+    expect(record.holdMs).toBe(0)
+
+    const rows = employeeUtilization(state, NOW)
+    const priya = rows.find((r) => r.counterId === 1)!
+    expect(priya.breakMs).toBe(10 * MIN)
+    expect(priya.actualProcessingMs).toBe(10 * MIN)
+
+    const kpis = managerKpis(state, NOW)
+    expect(kpis.totalBreakMs).toBe(10 * MIN)
+    expect(kpis.totalProcessingMs).toBe(10 * MIN)
+  })
+
+  it("reports employees currently on break", () => {
+    const state = emptyState()
+    startBreak(state, 2, NOW - MIN)
+    const kpis = managerKpis(state, NOW)
+    expect(kpis.employeesOnBreak).toBe(1)
+    expect(kpis.totalBreakMs).toBe(MIN)
   })
 })

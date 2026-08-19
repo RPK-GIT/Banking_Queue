@@ -163,20 +163,14 @@ await page.click("button:has-text('Document required')")
 await page.click("div[data-slot='dialog-content'] button:has-text('Put on Hold')")
 await page.waitForSelector("text=On hold · 1", { timeout: 5000 })
 check("held customer appears in the dedicated ON HOLD section", true)
-check(
-  "held customer left active service (T-108 not serving)",
-  (await page.locator(`${queues} >> text=On hold · 1`).count()) === 1
-)
-await page.screenshot({ path: `${shots}/adv-hold-section.png` })
-
-// Call Next must skip the held ticket
-await page.click(`${queues} button:has-text('Call Next')`)
 await page.waitForTimeout(400)
+// automatic assignment skips the held ticket and pulls the next FIFO customer
 check(
-  "Call Next skips the held ticket and serves the normal FIFO customer (T-111)",
-  (await page.locator(`${queues} >> text=T-111`).first().isVisible()) &&
+  "hold auto-assigns the next FIFO customer (T-111) — held ticket skipped",
+  (await page.locator(`${queues} button[title="View T-111's journey"]`).count()) >= 1 &&
     (await page.locator("text=On hold · 1").count()) === 1
 )
+await page.screenshot({ path: `${shots}/adv-hold-section.png` })
 
 // Release → NEXT AFTER CURRENT, ahead of normal FIFO
 await page.click("button:has-text('Release Hold')")
@@ -184,15 +178,14 @@ await page.waitForSelector("text=Next after current", { timeout: 5000 })
 check("released hold appears under NEXT AFTER CURRENT", true)
 await page.screenshot({ path: `${shots}/adv-next-after-current.png` })
 
-// complete the current customer, then the released hold must be served next
+// complete the current customer — the released hold is served AUTOMATICALLY
 await page.click(`${queues} button:has-text('Complete') >> nth=1`)
-await page.waitForTimeout(400)
-await page.click(`${queues} button:has-text('Call Next')`)
-await page.waitForTimeout(400)
-const nowServingC2 = await page
-  .locator(`${queues} button[title="View T-108's journey"]`)
-  .count()
-check("released customer (T-108) is served before normal FIFO (T-113)", nowServingC2 >= 1)
+await page.waitForTimeout(500)
+check(
+  "released customer (T-108) is auto-served before normal FIFO (T-113)",
+  (await page.locator(`${queues} button[title="View T-108's journey"]`).count()) >= 1 &&
+    (await page.locator("text=Next after current").count()) === 0
+)
 
 // WhatsApp reflects the hold journey from actual state
 await pickOption("button[aria-label='Select customer']", "T-108")

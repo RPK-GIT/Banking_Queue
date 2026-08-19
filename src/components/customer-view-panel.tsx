@@ -123,13 +123,15 @@ export function CustomerViewPanel({
       ? ""
       : status.status === "on-hold"
         ? "On Hold"
-        : status.priority
-          ? "Priority — Next After Current"
-          : status.status === "serving"
-            ? "Being served"
-            : status.status === "completed"
-              ? "Completed"
-              : "Waiting"
+        : status.paused
+          ? "Service Temporarily Paused"
+          : status.priority
+            ? "Priority — Next After Current"
+            : status.status === "serving"
+              ? "Being served"
+              : status.status === "completed"
+                ? "Completed"
+                : "Waiting"
 
   return (
     <aside
@@ -282,11 +284,13 @@ export function CustomerViewPanel({
                 <span className="text-right font-medium tabular-nums">
                   {status.status === "on-hold"
                     ? "on hold"
-                    : status.estWaitMin !== null
-                      ? `~${status.estWaitMin} min`
-                      : status.status === "serving"
-                        ? "now"
-                        : "—"}
+                    : status.paused
+                      ? "resuming soon"
+                      : status.estWaitMin !== null
+                        ? `~${status.estWaitMin} min`
+                        : status.status === "serving"
+                          ? "now"
+                          : "—"}
                 </span>
                 <span className="text-muted-foreground">Status</span>
                 <span
@@ -294,12 +298,13 @@ export function CustomerViewPanel({
                     "flex items-center justify-end gap-1 text-right font-semibold",
                     status.status === "waiting" && !status.priority && "text-amber-600",
                     status.priority && "text-violet-600",
-                    status.status === "serving" && "text-blue-600",
+                    status.status === "serving" && !status.paused && "text-blue-600",
+                    status.paused && "text-rose-600",
                     status.status === "on-hold" && "text-orange-600",
                     status.status === "completed" && "text-emerald-600"
                   )}
                 >
-                  {status.status === "on-hold" && (
+                  {(status.status === "on-hold" || status.paused) && (
                     <PauseCircle className="size-3" aria-hidden />
                   )}
                   {status.priority && <Zap className="size-3" aria-hidden />}

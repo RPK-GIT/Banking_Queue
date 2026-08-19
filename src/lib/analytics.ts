@@ -4,7 +4,8 @@ import {
   CAPACITY_ASSUMPTIONS,
   type TimeRange,
 } from "./capacity"
-import { stepHoldMs, stepProcessingMs } from "./durations"
+import { counterBreakMs, stepBreakMs, stepHoldMs, stepProcessingMs } from "./durations"
+import { waitingCount } from "./queue-logic"
 import type {
   HoldReason,
   JourneyStepStatus,
@@ -64,7 +65,7 @@ export function counterMetrics(
       totalProcessingMs,
       avgProcessingMs:
         tokensCompleted > 0 ? totalProcessingMs / tokensCompleted : 0,
-      queueLength: counter.queue.length + counter.priorityQueue.length,
+      queueLength: waitingCount(counter),
       serving: counter.currentCustomerId !== null,
     }
   })
@@ -102,11 +103,13 @@ export interface StepRecord {
   enteredAt: number
   startedAt: number
   completedAt: number | null
-  /** active employee time — always excludes hold episodes */
+  /** active employee time — always excludes hold episodes and break pauses */
   processingMs: number
   holdMs: number
   holdEvents: number
   holdReasons: HoldReason[]
+  /** employee-break pause time while this step was in service */
+  breakMs: number
   status: JourneyStepStatus
 }
 
@@ -132,6 +135,7 @@ export function stepRecords(state: QueueState, now: number): StepRecord[] {
         holdMs: stepHoldMs(step, now),
         holdEvents: step.holds.length,
         holdReasons: step.holds.map((h) => h.reason),
+        breakMs: stepBreakMs(step, now),
         status: step.status,
       })
     }
@@ -197,7 +201,11 @@ export interface EmployeeUtilization {
   avgProcessingMs: number
   holdMs: number
   holdEvents: number
-  /** customers currently waiting (priority + normal FIFO) */
+  /** employee break time in the window (from the counter's break log) */
+  breakMs: number
+  /** is the employee currently on a break */
+  onBreak: boolean
+  /** customers currently waiting (released + journey-priority + normal FIFO) */
   currentQueue: number
   /** customers currently on hold at this counter */
   currentlyHeld: number
@@ -240,7 +248,9 @@ export function employeeUtilization(
             : 0,
         holdMs,
         holdEvents: mine.reduce((s, r) => s + r.holdEvents, 0),
-        currentQueue: counter.queue.length + counter.priorityQueue.length,
+        breakMs: counterBreakMs(counter.breaks, now),
+        onBreak: counter.status === "on-break",
+        currentQueue: waitingCount(counter),
         currentlyHeld: counter.heldIds.length,
         serving: counter.currentCustomerId !== null,
         capacityMs,
@@ -262,6 +272,9 @@ export interface ManagerKpis {
   branchAvailableMs: number
   totalHoldMs: number
   tokensOnHold: number
+  /** total employee break time in the window */
+  totalBreakMs: number
+  employeesOnBreak: number
 }
 
 export function managerKpis(
@@ -301,6 +314,8 @@ export function managerKpis(
     branchAvailableMs: Math.max(0, branchCapacityMs - totalProcessingMs),
     totalHoldMs: records.reduce((s, r) => s + r.holdMs, 0),
     tokensOnHold: state.counters.reduce((s, c) => s + c.heldIds.length, 0),
+    totalBreakMs: rows.reduce((s, r) => s + r.breakMs, 0),
+    employeesOnBreak: rows.filter((r) => r.onBreak).length,
   }
 }
 

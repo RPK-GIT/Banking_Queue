@@ -147,7 +147,9 @@ function ClickableRow({
 function positionLabel(row: ActiveCustomerRow): string {
   if (row.status === "serving") return "Serving"
   if (row.status === "on-hold") return "On hold"
-  if (row.priority) return "Next after current"
+  if (row.tier === "released") return "Next after current"
+  if (row.tier === "priority")
+    return `#${row.position} · journey priority`
   return row.position !== null ? `#${row.position}` : "—"
 }
 
@@ -291,6 +293,7 @@ export function KpiDrilldownDialog({
             <Th right>Journey</Th>
             <Th right>Processing</Th>
             <Th right>Hold</Th>
+            <Th right>Break</Th>
             <Th right>Completed at</Th>
           </tr>
         </thead>
@@ -304,6 +307,7 @@ export function KpiDrilldownDialog({
               <Td right>{formatDuration(r.journeyMs)}</Td>
               <Td right>{formatDuration(r.processingMs)}</Td>
               <Td right>{r.holdMs > 0 ? formatDuration(r.holdMs) : "—"}</Td>
+              <Td right>{r.breakMs > 0 ? formatDuration(r.breakMs) : "—"}</Td>
               <Td right>{formatTime(r.completedAt)}</Td>
             </ClickableRow>
           ))}

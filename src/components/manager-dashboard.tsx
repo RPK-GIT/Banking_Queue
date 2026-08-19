@@ -669,7 +669,7 @@ export function ManagerDashboard({
           }
         />
         <VizCard
-          title="Hold Activity"
+          title="Hold & Break Activity"
           chartId="hold-activity"
           defaultViz="h-bar"
           options={["h-bar", "table"]}
@@ -696,15 +696,22 @@ export function ManagerDashboard({
                 <DataTable
                   columns={[
                     { key: "employee", label: "Employee" },
-                    { key: "events", label: "Hold events", align: "right" },
-                    { key: "total", label: "Total hold", align: "right" },
-                    { key: "held", label: "On hold now", align: "right" },
+                    { key: "events", label: "Holds", align: "right" },
+                    { key: "total", label: "Hold time", align: "right" },
+                    { key: "held", label: "Held now", align: "right" },
+                    { key: "breaks", label: "Break time", align: "right" },
                   ]}
                   rows={utilization.map((u) => ({
                     employee: `${u.employeeName} — C${u.counterId}`,
                     events: u.holdEvents,
                     total: u.holdMs > 0 ? formatDuration(u.holdMs) : "—",
                     held: u.currentlyHeld,
+                    breaks:
+                      u.breakMs > 0
+                        ? `${formatDuration(u.breakMs)}${u.onBreak ? " ☕" : ""}`
+                        : u.onBreak
+                          ? "☕ now"
+                          : "—",
                   }))}
                 />
               )

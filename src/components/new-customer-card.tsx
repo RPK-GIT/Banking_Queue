@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { COUNTER_DEFS } from "@/lib/queue-logic"
+import { COUNTER_DEFS, queuePosition } from "@/lib/queue-logic"
 import { useQueueStore } from "@/lib/queue-store"
 import { SERVICE_TYPES, type ServiceType } from "@/lib/types"
 
@@ -42,10 +42,13 @@ export function NewCustomerCard() {
   function announce(customerId: string, counter: number) {
     const state = useQueueStore.getState().state
     const customer = state.customers[customerId]
-    const queue = state.counters.find((c) => c.id === counter)?.queue ?? []
+    const position = queuePosition(state, customerId)
     notifyTransient(`Token ${customer.token} issued`, {
       kind: "success",
-      description: `${customer.name} joined Counter ${counter} at position #${queue.indexOf(customerId) + 1}`,
+      description:
+        customer.status === "serving"
+          ? `${customer.name} is being served at Counter ${counter} right away.`
+          : `${customer.name} joined Counter ${counter} at position #${position ?? 1}`,
     })
   }
 
@@ -70,7 +73,7 @@ export function NewCustomerCard() {
       name: randomName(),
       serviceType: "Account Opening",
       counterId: 1,
-      plannedRoute: [5, 3],
+      plannedRoute: [4, 3],
     })
     announce(customer.id, 1)
     notifyTransient("Multi-counter journey planned", {

@@ -1,4 +1,4 @@
-import { isPriority, queuePosition } from "./queue-logic"
+import { isReleasedHold, queuePosition } from "./queue-logic"
 import type { Customer, CustomerStatus, QueueState } from "./types"
 
 /**
@@ -56,6 +56,21 @@ export function buildWhatsAppMessages(customer: Customer): WhatsAppMessage[] {
         })
       }
     })
+    // employee breaks — customer-friendly wording, no internal staff details
+    step.breaks.forEach((pause, b) => {
+      messages.push({
+        id: `${customer.id}-pause-${i}-${b}`,
+        at: pause.startedAt,
+        text: `Your service is temporarily paused and will resume shortly.`,
+      })
+      if (pause.endedAt !== null) {
+        messages.push({
+          id: `${customer.id}-pause-ended-${i}-${b}`,
+          at: pause.endedAt,
+          text: `Your service has resumed. Thank you for waiting.`,
+        })
+      }
+    })
   })
 
   if (customer.completedAt !== null) {
@@ -66,7 +81,9 @@ export function buildWhatsAppMessages(customer: Customer): WhatsAppMessage[] {
     })
   }
 
-  return messages
+  // holds and breaks can interleave within a step — keep strict time order
+  // (stable sort preserves construction order for equal timestamps)
+  return messages.sort((a, b) => a.at - b.at)
 }
 
 export interface CustomerLiveStatus {
@@ -78,6 +95,8 @@ export interface CustomerLiveStatus {
    * "Priority — Next After Current"
    */
   priority: boolean
+  /** service paused because the employee is on a break */
+  paused: boolean
   /** current hold reason, only while on hold */
   holdReason: string | null
   /** 1-based queue position, null unless waiting (never shown while held) */
@@ -100,6 +119,7 @@ export function customerLiveStatus(
       counterId: null,
       counterName: null,
       priority: false,
+      paused: false,
       holdReason: null,
       position: null,
       estWaitMin: null,
@@ -113,12 +133,18 @@ export function customerLiveStatus(
     customer.status === "on-hold"
       ? step.holds.find((h) => h.releasedAt === null)
       : undefined
+  const servingCounter = state.counters.find(
+    (c) => c.currentCustomerId === customerId
+  )
 
   return {
     status: customer.status,
     counterId: step.counterId,
     counterName: step.counterName,
-    priority: customer.status === "waiting" && isPriority(state, customerId),
+    priority:
+      customer.status === "waiting" && isReleasedHold(state, customerId),
+    paused:
+      customer.status === "serving" && servingCounter?.status === "on-break",
     holdReason: openHold?.reason ?? null,
     position,
     estWaitMin:

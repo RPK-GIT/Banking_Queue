@@ -40,7 +40,11 @@ export function TransferDialog({ customerId, onClose }: TransferDialogProps) {
     const result = transfer(customer.id, destination)
     notifyTransient(`${customer.token} transferred`, {
       kind: "success",
-      description: `Added to Counter ${destination} queue at position #${result.position}`,
+      description: result.assignedImmediately
+        ? `Counter ${destination} was free — now being served immediately.`
+        : result.tier === "priority"
+          ? `Journey in progress — priority position #${result.position} at Counter ${destination}.`
+          : `Joined Counter ${destination}'s new requests at position #${result.position}.`,
     })
     close()
   }
@@ -56,8 +60,10 @@ export function TransferDialog({ customerId, onClose }: TransferDialogProps) {
             Transfer to Another Counter
           </DialogTitle>
           <DialogDescription>
-            The customer keeps their token and joins the <strong>end</strong> of
-            the destination queue — FIFO is never broken.
+            The customer keeps their token. A started journey joins the
+            destination&apos;s <strong>Journey in Progress</strong> queue —
+            ahead of new requests, FIFO within the group. A free counter serves
+            them immediately.
           </DialogDescription>
         </DialogHeader>
 
@@ -87,8 +93,14 @@ export function TransferDialog({ customerId, onClose }: TransferDialogProps) {
         <div className="grid grid-cols-2 gap-2">
           {COUNTER_DEFS.filter((c) => c.id !== customer.currentCounterId).map(
             (def) => {
-              const queueLength =
-                counters.find((c) => c.id === def.id)?.queue.length ?? 0
+              const target = counters.find((c) => c.id === def.id)
+              const onBreak = target?.status === "on-break"
+              const busy = Boolean(target?.currentCustomerId)
+              // a transferred serving customer has a started journey →
+              // they land after released + priority, ahead of new requests
+              const aheadCount =
+                (target?.releasedQueue.length ?? 0) +
+                (target?.priorityQueue.length ?? 0)
               const selected = destination === def.id
               return (
                 <button
@@ -105,7 +117,11 @@ export function TransferDialog({ customerId, onClose }: TransferDialogProps) {
                   <p className="font-medium">Counter {def.id}</p>
                   <p className="text-xs text-muted-foreground">{def.name}</p>
                   <p className="mt-1 text-[11px] text-muted-foreground">
-                    {queueLength} waiting → joins at #{queueLength + 1}
+                    {onBreak
+                      ? "☕ employee on break — will wait"
+                      : busy
+                        ? `priority — served after ${aheadCount + 1} customer${aheadCount ? "s" : ""}`
+                        : "free — served immediately"}
                   </p>
                 </button>
               )

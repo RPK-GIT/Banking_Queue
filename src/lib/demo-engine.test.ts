@@ -161,58 +161,83 @@ describe("demo engine — pause freezes the simulation, not the app", () => {
     expect(ravi?.journey.map((s) => s.counterId)).toEqual([1, 4, 3, 1])
   })
 
-  it("demonstrates the HOLD scenario deterministically (hold → held → release → priority → served)", () => {
+  it("demonstrates scenarios A–G deterministically (auto-assign, priority transfer, hold, release, break, resume)", () => {
     store().setDemoSpeed(1) // speed persists across tests — pin it
     store().playDemo()
 
-    // advance until Ravi (T-104) is ON HOLD at Counter 1
-    const raviId = () =>
-      Object.values(store().state.customers).find((c) => c.token === "T-104")!.id
-    let safety = 0
-    while (
-      store().state.customers[raviId()]?.status !== "on-hold" &&
-      safety < DEMO_STEP_COUNT
-    ) {
-      vi.advanceTimersByTime(STEP_DELAY)
-      safety += 1
+    const byToken = (token: string) =>
+      Object.values(store().state.customers).find((c) => c.token === token)
+    const counter = (id: number) => store().state.counters[id - 1]
+    const step = (n: number) => {
+      while (store().demoStepIndex < n) vi.advanceTimersByTime(STEP_DELAY)
     }
-    const heldState = store().state
-    const counter1 = heldState.counters[0]
-    const ravi = heldState.customers[raviId()]
-    expect(ravi.status).toBe("on-hold")
-    expect(counter1.heldIds).toContain(ravi.id)
-    expect(counter1.currentCustomerId).toBeNull()
-    // another customer (T-116 Vikram) remains waiting in normal FIFO
-    const vikram = Object.values(heldState.customers).find(
-      (c) => c.token === "T-116"
-    )
-    expect(vikram).toBeDefined()
 
-    // next step: Counter 1 calls next — the HELD ticket is skipped
-    vi.advanceTimersByTime(STEP_DELAY)
-    expect(store().state.counters[0].currentCustomerId).toBe(vikram!.id)
-    expect(store().state.customers[raviId()].status).toBe("on-hold")
+    // SCENARIO A — completion auto-assigns the next eligible customer
+    step(2) // Counter 1 completes T-106
+    expect(byToken("T-106")?.status).toBe("completed")
+    expect(counter(1).currentCustomerId).toBe(byToken("T-114")!.id)
 
-    // release → Ravi becomes NEXT AFTER CURRENT (priority queue)
-    vi.advanceTimersByTime(STEP_DELAY)
-    expect(store().state.counters[0].priorityQueue).toEqual([raviId()])
-    expect(store().state.customers[raviId()].status).toBe("waiting")
+    // SCENARIO B — started journey transfers into the PRIORITY queue
+    step(4) // T-115 (journey started at C1) transfers to busy Counter 4
+    expect(counter(4).priorityQueue).toEqual([byToken("T-115")!.id])
+    expect(counter(4).queue).toContain(byToken("T-109")!.id)
+    step(5) // C4 completes → priority T-115 beats earlier-arrived T-109
+    expect(counter(4).currentCustomerId).toBe(byToken("T-115")!.id)
+    expect(byToken("T-109")?.status).toBe("waiting")
 
-    // current (Vikram) completes, then Ravi is served FIRST despite T-116's
-    // hold-time arrival — the released hold restores his priority
-    vi.advanceTimersByTime(STEP_DELAY) // complete Vikram
-    vi.advanceTimersByTime(STEP_DELAY) // call next → Ravi
-    expect(store().state.counters[0].currentCustomerId).toBe(raviId())
+    // SCENARIO C — hold auto-assigns the next eligible customer
+    step(7) // Ravi held at Counter 3 → Aisha (priority) starts automatically
+    expect(byToken("T-104")?.status).toBe("on-hold")
+    expect(counter(3).heldIds).toEqual([byToken("T-104")!.id])
+    expect(counter(3).currentCustomerId).toBe(byToken("T-115")!.id)
 
-    // run to the end — Ravi's journey completes with exactly one hold episode
-    vi.advanceTimersByTime(DEMO_STEP_COUNT * STEP_DELAY)
-    const done = store().state.customers[raviId()]
-    expect(done.status).toBe("completed")
-    const lastStep = done.journey[done.journey.length - 1]
-    expect(lastStep.holds).toHaveLength(1)
-    expect(lastStep.holds[0].reason).toBe("Document required")
-    expect(lastStep.holds[0].releasedAt).not.toBeNull()
-    expect(lastStep.holds[0].resumedAt).not.toBeNull()
+    // SCENARIO D — release → NEXT AFTER CURRENT → served on completion
+    step(8)
+    expect(counter(3).releasedQueue).toEqual([byToken("T-104")!.id])
+    expect(counter(3).currentCustomerId).toBe(byToken("T-115")!.id) // no interrupt
+    step(9) // Aisha completes → released Ravi is served first
+    expect(byToken("T-115")?.status).toBe("completed")
+    expect(counter(3).currentCustomerId).toBe(byToken("T-104")!.id)
+
+    // transfer to IDLE counter → serving immediately
+    step(10)
+    expect(counter(1).currentCustomerId).toBe(byToken("T-104")!.id)
+    expect(byToken("T-104")?.status).toBe("serving")
+
+    // SCENARIO E — employee break pauses the service, counter ON BREAK
+    step(11)
+    expect(counter(1).status).toBe("on-break")
+    expect(counter(1).currentCustomerId).toBe(byToken("T-104")!.id)
+
+    // nobody is auto-assigned while the employee is on break
+    step(12)
+    expect(byToken("T-116")?.status).toBe("waiting")
+    expect(counter(1).currentCustomerId).toBe(byToken("T-104")!.id)
+
+    // SCENARIO F — return from break resumes the SAME customer
+    step(13)
+    expect(counter(1).status).toBe("serving")
+    expect(counter(1).currentCustomerId).toBe(byToken("T-104")!.id)
+
+    // SCENARIO G — completion after the break auto-assigns the next customer
+    step(14)
+    const ravi = byToken("T-104")!
+    expect(ravi.status).toBe("completed")
+    expect(counter(1).currentCustomerId).toBe(byToken("T-116")!.id)
+
+    // Ravi's audit trail carries exactly one hold and one break pause
+    expect(ravi.journey.flatMap((s) => s.holds)).toHaveLength(1)
+    expect(ravi.journey.flatMap((s) => s.breaks)).toHaveLength(1)
+    const hold = ravi.journey.flatMap((s) => s.holds)[0]
+    expect(hold.reason).toBe("Document required")
+    expect(hold.releasedAt).not.toBeNull()
+    expect(hold.resumedAt).not.toBeNull()
+    const pause = ravi.journey.flatMap((s) => s.breaks)[0]
+    expect(pause.endedAt).not.toBeNull()
+
+    // run to the end cleanly
+    step(DEMO_STEP_COUNT)
+    expect(store().demoStatus).toBe("idle")
   })
 
   it("pause prevents any new notifications from being generated", async () => {

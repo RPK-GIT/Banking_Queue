@@ -8,7 +8,6 @@ import {
   waitingRows,
 } from "./drilldown"
 import {
-  callNextCustomer,
   completeCurrentService,
   emptyState,
   holdCurrentCustomer,
@@ -79,12 +78,10 @@ describe("main KPI drill-downs — the records behind each number", () => {
     const c = issueToken(
       state,
       { name: "Done", serviceType: "Cash Deposit", counterId: 1 },
-      NOW - 15 * MIN
+      NOW - 15 * MIN // idle counter → serving immediately
     )
-    callNextCustomer(state, 1, NOW - 15 * MIN)
     holdCurrentCustomer(state, 1, "Document required", NOW - 10 * MIN)
-    releaseHold(state, c.id, NOW - 4 * MIN)
-    callNextCustomer(state, 1, NOW - 4 * MIN)
+    releaseHold(state, c.id, NOW - 4 * MIN) // idle → resumes immediately
     completeCurrentService(state, 1, NOW)
 
     const [row] = completedRows(state, NOW)

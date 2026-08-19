@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  callNextCustomer,
   emptyState,
+  endBreak,
   holdCurrentCustomer,
   issueToken,
   releaseHold,
+  startBreak,
 } from "./queue-logic"
 import { seedState } from "./seed"
 import { buildWhatsAppMessages, customerLiveStatus } from "./whatsapp"
@@ -52,14 +53,14 @@ describe("WhatsApp customer view (derived, pause-safe)", () => {
 
   it("reports queue, position and estimated wait for a waiting customer", () => {
     const state = seedState(NOW)
-    const joseph = byToken(state, "T-109") // waiting #2 at Counter 4
+    const joseph = byToken(state, "T-109") // waiting #1 at Counter 4
     const status = customerLiveStatus(state, joseph.id)
 
     expect(status.status).toBe("waiting")
     expect(status.counterId).toBe(4)
     expect(status.counterName).toBe("Customer Service")
-    expect(status.position).toBe(2)
-    expect(status.estWaitMin).toBe(7)
+    expect(status.position).toBe(1)
+    expect(status.estWaitMin).toBe(3)
   })
 
   it("status snapshot is stable for unchanged state (frozen while paused)", () => {
@@ -93,10 +94,15 @@ describe("WhatsApp hold experience (driven by ACTUAL state, never faked)", () =>
     const customer = issueToken(
       state,
       { name: "Ravi Kumar", serviceType: "Account Opening", counterId: 1 },
-      NOW - 10 * MIN
+      NOW - 10 * MIN // idle counter → serving immediately
     )
-    callNextCustomer(state, 1, NOW - 8 * MIN)
     holdCurrentCustomer(state, 1, "Document required", NOW - 5 * MIN)
+    // another customer is auto-assigned, so a release stays NEXT AFTER CURRENT
+    issueToken(
+      state,
+      { name: "Keeps Busy", serviceType: "Cash Deposit", counterId: 1 },
+      NOW - 4 * MIN
+    )
     return { state, customer }
   }
 
@@ -136,6 +142,54 @@ describe("WhatsApp hold experience (driven by ACTUAL state, never faked)", () =>
     const a = buildWhatsAppMessages(customer)
     const b = buildWhatsAppMessages(customer)
     expect(a).toEqual(b)
+    expect(new Set(a.map((m) => m.id)).size).toBe(a.length)
+  })
+})
+
+describe("WhatsApp employee-break experience (customer-friendly, no staff internals)", () => {
+  function pausedScenario() {
+    const state = emptyState()
+    const customer = issueToken(
+      state,
+      { name: "Lakshmi Rao", serviceType: "Cash Withdrawal", counterId: 2 },
+      NOW - 10 * MIN // serving immediately
+    )
+    startBreak(state, 2, NOW - 5 * MIN)
+    return { state, customer }
+  }
+
+  it("shows SERVICE TEMPORARILY PAUSED without exposing employee details", () => {
+    const { state, customer } = pausedScenario()
+
+    const texts = buildWhatsAppMessages(customer).map((m) => m.text)
+    const pauseMessage = texts.find((t) => t.includes("temporarily paused"))
+    expect(pauseMessage).toBe(
+      "Your service is temporarily paused and will resume shortly."
+    )
+    // never leak internal staff information to the customer
+    expect(pauseMessage).not.toMatch(/break|employee|Arjun/i)
+
+    const status = customerLiveStatus(state, customer.id)
+    expect(status.status).toBe("serving")
+    expect(status.paused).toBe(true)
+  })
+
+  it("announces the resume when the employee returns", () => {
+    const { state, customer } = pausedScenario()
+    endBreak(state, 2, NOW - MIN)
+
+    const texts = buildWhatsAppMessages(customer).map((m) => m.text)
+    expect(texts.some((t) => t.includes("Your service has resumed"))).toBe(true)
+
+    const status = customerLiveStatus(state, customer.id)
+    expect(status.paused).toBe(false)
+    expect(status.status).toBe("serving")
+  })
+
+  it("break messages never duplicate — pure derivation", () => {
+    const { customer } = pausedScenario()
+    const a = buildWhatsAppMessages(customer)
+    expect(a).toEqual(buildWhatsAppMessages(customer))
     expect(new Set(a.map((m) => m.id)).size).toBe(a.length)
   })
 })

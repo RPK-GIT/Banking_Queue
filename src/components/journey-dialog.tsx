@@ -96,6 +96,18 @@ function buildTimeline(customer: Customer): TimelineEvent[] {
         })
       }
     }
+    for (const pause of step.breaks) {
+      events.push({
+        at: pause.startedAt,
+        text: `Service paused — employee break at Counter ${step.counterId}`,
+      })
+      if (pause.endedAt) {
+        events.push({
+          at: pause.endedAt,
+          text: `Service resumed — employee returned at Counter ${step.counterId}`,
+        })
+      }
+    }
     if (step.completedAt) {
       events.push({
         at: step.completedAt,
@@ -106,7 +118,8 @@ function buildTimeline(customer: Customer): TimelineEvent[] {
   if (customer.completedAt) {
     events.push({ at: customer.completedAt, text: "Journey completed" })
   }
-  return events
+  // holds and breaks can interleave — keep the audit trail in time order
+  return events.sort((a, b) => a.at - b.at)
 }
 
 function statusLine(customer: Customer): string {

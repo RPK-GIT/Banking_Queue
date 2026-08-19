@@ -73,9 +73,9 @@ const TITLES: Record<
     note: "Estimated Capacity vs actual processing per employee/counter. Capacity is a deterministic prototype assumption, not a forecast.",
   },
   holds: {
-    title: "Hold Activity",
+    title: "Hold & Break Activity",
     icon: PauseCircle,
-    note: "Hold events, durations and reasons. Hold time is never counted as employee processing time.",
+    note: "Hold events, durations, reasons and employee break time. Neither holds nor breaks are ever counted as employee processing time.",
   },
 }
 
@@ -135,6 +135,7 @@ function RecordsTable({
           <Th>Completed</Th>
           <Th right>Processing</Th>
           <Th right>Hold</Th>
+          <Th right>Break</Th>
           <Th>Status</Th>
         </tr>
       </thead>
@@ -165,6 +166,7 @@ function RecordsTable({
             <Td>{r.completedAt ? formatTime(r.completedAt) : "—"}</Td>
             <Td right>{formatDuration(r.processingMs)}</Td>
             <Td right>{r.holdMs > 0 ? formatDuration(r.holdMs) : "—"}</Td>
+            <Td right>{r.breakMs > 0 ? formatDuration(r.breakMs) : "—"}</Td>
             <Td>{STEP_STATUS_LABEL[r.status] ?? r.status}</Td>
           </tr>
         ))}
@@ -450,9 +452,11 @@ export function ManagerDrilldownDialog({
     const totalHoldMs = records.reduce((s, r) => s + r.holdMs, 0)
     const holdEvents = records.reduce((s, r) => s + r.holdEvents, 0)
     const currentlyHeld = state.counters.reduce((s, c) => s + c.heldIds.length, 0)
+    const totalBreakMs = utilization.reduce((s, u) => s + u.breakMs, 0)
+    const onBreakNow = utilization.filter((u) => u.onBreak).length
     body = (
       <div className="flex flex-col gap-3">
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <StatTile label="Currently on hold" value={String(currentlyHeld)} />
           <StatTile label="Hold events" value={String(holdEvents)} />
           <StatTile label="Total hold time" value={formatDuration(totalHoldMs)} />
@@ -460,6 +464,12 @@ export function ManagerDrilldownDialog({
             label="Avg hold time"
             value={holdEvents > 0 ? formatDuration(totalHoldMs / holdEvents) : "—"}
           />
+          <StatTile
+            label="Employee break time"
+            value={totalBreakMs > 0 ? formatDuration(totalBreakMs) : "—"}
+            sub="never counted as processing"
+          />
+          <StatTile label="On break now" value={String(onBreakNow)} />
         </div>
         {reasons.length > 0 && (
           <div>
@@ -568,6 +578,11 @@ export function EmployeeDetailDialog({
               label="Total hold time"
               value={utilRow.holdMs > 0 ? formatDuration(utilRow.holdMs) : "—"}
               sub={`${utilRow.holdEvents} hold event${utilRow.holdEvents === 1 ? "" : "s"}`}
+            />
+            <StatTile
+              label="Break time"
+              value={utilRow.breakMs > 0 ? formatDuration(utilRow.breakMs) : "—"}
+              sub={utilRow.onBreak ? "on break now" : "excluded from processing"}
             />
             <StatTile
               label="Current queue"
