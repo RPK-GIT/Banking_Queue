@@ -7,10 +7,11 @@ import {
   stepProcessingMs,
 } from "./durations"
 import {
-  callNextCustomer,
+  callCustomer,
   completeCurrentService,
   emptyState,
   endBreak,
+  getRecommendedCustomer,
   holdCurrentCustomer,
   issueToken,
   releaseHold,
@@ -32,10 +33,21 @@ function issue(
   return issueToken(state, { name, serviceType, counterId }, at)
 }
 
+function issueAndCall(
+  state: QueueState,
+  name: string,
+  counterId: number,
+  at = T0
+) {
+  const customer = issue(state, name, counterId, at)
+  callCustomer(state, counterId, customer.id, at)
+  return customer
+}
+
 describe("EMPLOYEE BREAK — counter becomes unavailable, customer keeps their place", () => {
   it("starting a break while serving pauses the service (not a hold, not a re-queue)", () => {
     const state = emptyState()
-    const customer = issue(state, "Paused", 2) // auto-serving
+    const customer = issueAndCall(state, "Paused", 2)
 
     startBreak(state, 2, T0 + 5 * MIN)
 
@@ -52,36 +64,39 @@ describe("EMPLOYEE BREAK — counter becomes unavailable, customer keeps their p
     ])
   })
 
-  it("no new customer is assigned while the employee is on break", () => {
+  it("no customer can be called while the employee is on break", () => {
     const state = emptyState()
-    issue(state, "Paused", 2)
+    issueAndCall(state, "Paused", 2)
     startBreak(state, 2, T0 + 1)
 
     const waiting = issue(state, "Arrives During Break", 2, T0 + 2)
 
     expect(waiting.status).toBe("waiting")
-    expect(state.counters[1].currentCustomerId).not.toBe(waiting.id)
     expect(state.counters[1].queue).toEqual([waiting.id])
-    // manual Call Next is blocked too
-    expect(() => callNextCustomer(state, 2, T0 + 3)).toThrow(/break/)
+    expect(() => callCustomer(state, 2, waiting.id, T0 + 3)).toThrow(/break/)
   })
 
-  it("a break on an idle counter also blocks assignment until the employee returns", () => {
+  it("returning from a break with no paused customer only RECOMMENDS — explicit call required", () => {
     const state = emptyState()
     startBreak(state, 3, T0)
     const waiting = issue(state, "Waits", 3, T0 + 1)
     expect(waiting.status).toBe("waiting")
-    expect(state.counters[2].currentCustomerId).toBeNull()
 
     endBreak(state, 3, T0 + 10)
-    // no paused customer existed → next eligible assigned automatically
-    expect(state.counters[2].currentCustomerId).toBe(waiting.id)
+
+    // counter AVAILABLE, customer recommended, nobody auto-assigned
+    expect(state.counters[2].status).toBe("available")
+    expect(state.counters[2].currentCustomerId).toBeNull()
+    expect(waiting.status).toBe("waiting")
+    expect(getRecommendedCustomer(state, 3)?.id).toBe(waiting.id)
+
+    callCustomer(state, 3, waiting.id, T0 + 11)
     expect(waiting.status).toBe("serving")
   })
 
   it("returning from break RESUMES the paused customer — same timer, same priority", () => {
     const state = emptyState()
-    const paused = issue(state, "Paused", 2)
+    const paused = issueAndCall(state, "Paused", 2)
     issue(state, "Still Waiting", 2, T0 + 1)
     startBreak(state, 2, T0 + 5)
 
@@ -97,22 +112,23 @@ describe("EMPLOYEE BREAK — counter becomes unavailable, customer keeps their p
     })
   })
 
-  it("completing after the break auto-assigns the next eligible customer", () => {
+  it("completing after the break recommends the next customer — no auto-assign", () => {
     const state = emptyState()
-    issue(state, "Paused", 2)
+    issueAndCall(state, "Paused", 2)
     const next = issue(state, "Next", 2, T0 + 1)
     startBreak(state, 2, T0 + 5)
     endBreak(state, 2, T0 + 20)
 
     completeCurrentService(state, 2, T0 + 30)
 
-    expect(state.counters[1].currentCustomerId).toBe(next.id)
-    expect(next.status).toBe("serving")
+    expect(state.counters[1].currentCustomerId).toBeNull()
+    expect(next.status).toBe("waiting")
+    expect(getRecommendedCustomer(state, 2)?.id).toBe(next.id)
   })
 
   it("cannot complete, hold or transfer the paused customer while the employee is away", () => {
     const state = emptyState()
-    const paused = issue(state, "Paused", 2)
+    const paused = issueAndCall(state, "Paused", 2)
     startBreak(state, 2, T0 + 5)
 
     expect(() => completeCurrentService(state, 2, T0 + 10)).toThrow(/break/)
@@ -134,7 +150,7 @@ describe("EMPLOYEE BREAK — time accounting", () => {
   it("matches the spec example: 20m elapsed = 10m processing + 10m break", () => {
     const state = emptyState()
     // Started 09:42 · break 09:47 · returned 09:57 · completed 10:02
-    const customer = issue(state, "Spec", 2, T0) // service starts 09:42
+    const customer = issueAndCall(state, "Spec", 2, T0) // 09:42
     startBreak(state, 2, T0 + 5 * MIN) // 09:47
     endBreak(state, 2, T0 + 15 * MIN) // 09:57
     completeCurrentService(state, 2, T0 + 20 * MIN) // 10:02
@@ -148,7 +164,7 @@ describe("EMPLOYEE BREAK — time accounting", () => {
 
   it("processing time is frozen while the employee is on break", () => {
     const state = emptyState()
-    const c = issue(state, "Frozen", 1)
+    const c = issueAndCall(state, "Frozen", 1)
     startBreak(state, 1, T0 + 3 * MIN)
 
     const step = c.journey[0]
@@ -169,11 +185,12 @@ describe("EMPLOYEE BREAK — time accounting", () => {
 
   it("break time and hold time are tracked independently on the same journey", () => {
     const state = emptyState()
-    const c = issue(state, "Both", 1, T0)
+    const c = issueAndCall(state, "Both", 1, T0)
     startBreak(state, 1, T0 + 2 * MIN)
     endBreak(state, 1, T0 + 4 * MIN) // 2m break
     holdCurrentCustomer(state, 1, "Document required", T0 + 6 * MIN)
-    releaseHold(state, c.id, T0 + 9 * MIN) // 3m hold, idle → resumes at once
+    releaseHold(state, c.id, T0 + 9 * MIN) // 3m hold — recommended again
+    callCustomer(state, 1, c.id, T0 + 9 * MIN) // employee resumes immediately
     completeCurrentService(state, 1, T0 + 12 * MIN)
 
     const totals = customerTotals(c, T0 + 12 * MIN)

@@ -161,7 +161,7 @@ describe("demo engine — pause freezes the simulation, not the app", () => {
     expect(ravi?.journey.map((s) => s.counterId)).toEqual([1, 4, 3, 1])
   })
 
-  it("demonstrates scenarios A–G deterministically (auto-assign, priority transfer, hold, release, break, resume)", () => {
+  it("demonstrates the manual-call model: recommendation → employee call → Now Serving", () => {
     store().setDemoSpeed(1) // speed persists across tests — pin it
     store().playDemo()
 
@@ -172,75 +172,79 @@ describe("demo engine — pause freezes the simulation, not the app", () => {
       while (store().demoStepIndex < n) vi.advanceTimersByTime(STEP_DELAY)
     }
 
-    // SCENARIO A — completion auto-assigns the next eligible customer
+    // completion RECOMMENDS — nobody becomes Now Serving automatically
     step(2) // Counter 1 completes T-106
     expect(byToken("T-106")?.status).toBe("completed")
+    expect(counter(1).currentCustomerId).toBeNull() // no auto-assignment
+    expect(byToken("T-114")?.status).toBe("waiting")
+
+    // the demo performs the EXPLICIT call (same business action as a human)
+    step(3)
     expect(counter(1).currentCustomerId).toBe(byToken("T-114")!.id)
 
-    // SCENARIO B — started journey transfers into the PRIORITY queue
-    step(4) // T-115 (journey started at C1) transfers to busy Counter 4
+    // journey-started transfer → PRIORITY queue at busy Counter 4
+    step(6)
     expect(counter(4).priorityQueue).toEqual([byToken("T-115")!.id])
     expect(counter(4).queue).toContain(byToken("T-109")!.id)
-    step(5) // C4 completes → priority T-115 beats earlier-arrived T-109
+    step(7) // C4 completes T-107 → T-115 is recommended, still waiting
+    expect(counter(4).currentCustomerId).toBeNull()
+    expect(byToken("T-115")?.status).toBe("waiting")
+    step(8) // Deepa calls T-115 — journey priority honored explicitly
     expect(counter(4).currentCustomerId).toBe(byToken("T-115")!.id)
-    expect(byToken("T-109")?.status).toBe("waiting")
 
-    // SCENARIO C — hold auto-assigns the next eligible customer
-    step(7) // Ravi held at Counter 3 → Aisha (priority) starts automatically
+    // HOLD frees the counter but assigns nobody
+    step(11)
     expect(byToken("T-104")?.status).toBe("on-hold")
     expect(counter(3).heldIds).toEqual([byToken("T-104")!.id])
+    expect(counter(3).currentCustomerId).toBeNull() // available, no auto-call
+    step(12) // Kavita explicitly calls Aisha
     expect(counter(3).currentCustomerId).toBe(byToken("T-115")!.id)
 
-    // SCENARIO D — release → NEXT AFTER CURRENT → served on completion
-    step(8)
-    expect(counter(3).releasedQueue).toEqual([byToken("T-104")!.id])
-    expect(counter(3).currentCustomerId).toBe(byToken("T-115")!.id) // no interrupt
-    step(9) // Aisha completes → released Ravi is served first
+    // release → NEXT AFTER CURRENT; completion only recommends the released
+    step(14)
     expect(byToken("T-115")?.status).toBe("completed")
+    expect(counter(3).releasedQueue).toEqual([byToken("T-104")!.id])
+    expect(counter(3).currentCustomerId).toBeNull() // recommended, not served
+    step(15)
     expect(counter(3).currentCustomerId).toBe(byToken("T-104")!.id)
 
-    // transfer to IDLE counter → serving immediately
-    step(10)
+    // transfer to IDLE counter → recommendation, NOT assignment
+    step(16)
+    expect(counter(1).currentCustomerId).toBeNull()
+    expect(byToken("T-104")?.status).toBe("waiting")
+    expect(counter(1).priorityQueue).toEqual([byToken("T-104")!.id])
+    step(17) // Priya explicitly calls Ravi
     expect(counter(1).currentCustomerId).toBe(byToken("T-104")!.id)
-    expect(byToken("T-104")?.status).toBe("serving")
 
-    // SCENARIO E — employee break pauses the service, counter ON BREAK
-    step(11)
+    // employee break pauses the current service; arrivals wait
+    step(19)
     expect(counter(1).status).toBe("on-break")
     expect(counter(1).currentCustomerId).toBe(byToken("T-104")!.id)
-
-    // nobody is auto-assigned while the employee is on break
-    step(12)
     expect(byToken("T-116")?.status).toBe("waiting")
-    expect(counter(1).currentCustomerId).toBe(byToken("T-104")!.id)
 
-    // SCENARIO F — return from break resumes the SAME customer
-    step(13)
+    // return from break resumes the SAME customer
+    step(20)
     expect(counter(1).status).toBe("serving")
     expect(counter(1).currentCustomerId).toBe(byToken("T-104")!.id)
 
-    // SCENARIO G — completion after the break auto-assigns the next customer
-    step(14)
+    // completion after the break: T-116 recommended, not assigned
+    step(21)
     const ravi = byToken("T-104")!
     expect(ravi.status).toBe("completed")
-    expect(counter(1).currentCustomerId).toBe(byToken("T-116")!.id)
+    expect(counter(1).currentCustomerId).toBeNull()
+    expect(byToken("T-116")?.status).toBe("waiting")
 
     // Ravi's audit trail carries exactly one hold and one break pause
     expect(ravi.journey.flatMap((s) => s.holds)).toHaveLength(1)
     expect(ravi.journey.flatMap((s) => s.breaks)).toHaveLength(1)
-    const hold = ravi.journey.flatMap((s) => s.holds)[0]
-    expect(hold.reason).toBe("Document required")
-    expect(hold.releasedAt).not.toBeNull()
-    expect(hold.resumedAt).not.toBeNull()
-    const pause = ravi.journey.flatMap((s) => s.breaks)[0]
-    expect(pause.endedAt).not.toBeNull()
+    expect(ravi.journey.flatMap((s) => s.holds)[0].resumedAt).not.toBeNull()
 
     // run to the end cleanly
     step(DEMO_STEP_COUNT)
     expect(store().demoStatus).toBe("idle")
   })
 
-  it("demonstrates QUEUE OVERRIDE: automation → human judgment → automation resumes", () => {
+  it("demonstrates QUEUE OVERRIDE: recommendation → override call → recommendation returns", () => {
     store().setDemoSpeed(1)
     store().playDemo()
 
@@ -251,13 +255,13 @@ describe("demo engine — pause freezes the simulation, not the app", () => {
       while (store().demoStepIndex < n) vi.advanceTimersByTime(STEP_DELAY)
     }
 
-    // step 15 arms the override at Counter 2 (recommended T-111, chosen T-113)
-    step(15)
-    expect(counter2().nextOverrideId).toBe(byToken("T-113")!.id)
+    // step 22: Counter 2 completes T-108 — T-111 recommended, nobody assigned
+    step(22)
+    expect(counter2().currentCustomerId).toBeNull()
     expect(counter2().queue).toEqual([byToken("T-111")!.id, byToken("T-113")!.id])
 
-    // step 16: completion applies the override — T-113 served, T-111 untouched
-    step(16)
+    // step 23: Arjun CALLS T-113 instead — override audited, T-111 untouched
+    step(23)
     expect(counter2().currentCustomerId).toBe(byToken("T-113")!.id)
     expect(counter2().queue).toEqual([byToken("T-111")!.id]) // position kept
     expect(store().state.overrides).toHaveLength(1)
@@ -269,8 +273,13 @@ describe("demo engine — pause freezes the simulation, not the app", () => {
       reason: "Customer ready",
     })
 
-    // step 17: automation resumes — the original recommendation is served
-    step(17)
+    // step 24: T-113 completes — T-111 recommended again, NOT auto-assigned
+    step(24)
+    expect(counter2().currentCustomerId).toBeNull()
+    expect(byToken("T-111")?.status).toBe("waiting")
+
+    // step 25: Arjun calls T-111 — back to following the recommendation
+    step(25)
     expect(counter2().currentCustomerId).toBe(byToken("T-111")!.id)
 
     step(DEMO_STEP_COUNT)

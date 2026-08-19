@@ -276,10 +276,14 @@ export interface ManagerKpis {
   /** total employee break time in the window */
   totalBreakMs: number
   employeesOnBreak: number
-  /** manual queue overrides in the window */
+  /** explicit customer calls (started steps) in the window */
+  calls: number
+  /** override calls (non-recommended customer) in the window */
   overrides: number
-  /** overrides ÷ total assignments, 0..1 */
+  /** override calls ÷ total calls, 0..1 */
   overrideRate: number
+  /** calls that followed the system recommendation ÷ calls, 0..1 */
+  recommendationAcceptance: number
 }
 
 export function managerKpis(
@@ -322,8 +326,10 @@ export function managerKpis(
     tokensOnHold: state.counters.reduce((s, c) => s + c.heldIds.length, 0),
     totalBreakMs: rows.reduce((s, r) => s + r.breakMs, 0),
     employeesOnBreak: rows.filter((r) => r.onBreak).length,
+    calls: overrideInfo.calls,
     overrides: overrideInfo.overrides,
     overrideRate: overrideInfo.rate,
+    recommendationAcceptance: overrideInfo.acceptanceRate,
   }
 }
 
@@ -353,17 +359,27 @@ export function serviceAverages(records: StepRecord[]): ServiceAverage[] {
 }
 
 /* ------------------------------------------------------------------------- *
- * Queue Override analytics — automation vs human judgment. An override rate
- * is an OPERATIONAL metric, not a verdict: it simply shows how often
- * employees exercised judgment over the automated recommendation.
+ * Recommendation & Queue Override analytics. RECOMMENDATION ≠ ASSIGNMENT:
+ * every service starts with an explicit employee CALL. Each call consumed
+ * one system recommendation, so:
+ *
+ *   recommendations = calls
+ *   acceptance rate = calls following the recommendation ÷ calls
+ *   override rate   = override calls ÷ calls
+ *
+ * An override rate is an OPERATIONAL metric, not a verdict.
  * ------------------------------------------------------------------------- */
 
 export interface OverrideBreakdown {
-  /** manual overrides in the filtered window */
+  /** override calls (non-recommended customer) in the filtered window */
   overrides: number
-  /** total service assignments (started steps) in the same window */
-  assignments: number
-  /** overrides ÷ assignments, 0..1 (0 when no assignments) */
+  /** explicit customer calls (started steps) in the same window */
+  calls: number
+  /** system recommendations consumed — one per call */
+  recommendations: number
+  /** calls that followed the recommendation ÷ calls, 0..1 */
+  acceptanceRate: number
+  /** override calls ÷ calls, 0..1 (0 when no calls) */
   rate: number
   byEmployee: Array<{ employeeName: string; counterId: number; count: number }>
   records: OverrideRecord[]
@@ -386,12 +402,7 @@ export function overrideBreakdown(
     })
     .slice()
     .sort((a, b) => b.at - a.at)
-  const assignments = filterRecords(
-    stepRecords(state, now),
-    filters,
-    state,
-    now
-  ).length
+  const calls = filterRecords(stepRecords(state, now), filters, state, now).length
   const byEmployee = state.counters
     .filter((c) => filters.counter === "all" || c.id === filters.counter)
     .filter(
@@ -404,8 +415,10 @@ export function overrideBreakdown(
     }))
   return {
     overrides: records.length,
-    assignments,
-    rate: assignments > 0 ? records.length / assignments : 0,
+    calls,
+    recommendations: calls,
+    acceptanceRate: calls > 0 ? (calls - records.length) / calls : 0,
+    rate: calls > 0 ? records.length / calls : 0,
     byEmployee,
     records,
   }

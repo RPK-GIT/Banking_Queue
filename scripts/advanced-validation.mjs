@@ -164,27 +164,28 @@ await page.click("div[data-slot='dialog-content'] button:has-text('Put on Hold')
 await page.waitForSelector("text=On hold · 1", { timeout: 5000 })
 check("held customer appears in the dedicated ON HOLD section", true)
 await page.waitForTimeout(400)
-// automatic assignment skips the held ticket and pulls the next FIFO customer
+// the counter is free with a RECOMMENDATION — nobody is auto-assigned
 check(
-  "hold auto-assigns the next FIFO customer (T-111) — held ticket skipped",
-  (await page.locator(`${queues} button[title="View T-111's journey"]`).count()) >= 1 &&
-    (await page.locator("text=On hold · 1").count()) === 1
+  "hold frees the counter and recommends T-111 (held ticket skipped, no auto-call)",
+  (await page.locator("[data-testid='recommended-2']:has-text('T-111')").count()) === 1 &&
+    (await page.locator("[data-testid='now-serving-2']").count()) === 0
 )
 await page.screenshot({ path: `${shots}/adv-hold-section.png` })
 
-// Release → NEXT AFTER CURRENT, ahead of normal FIFO
+// Release → NEXT AFTER CURRENT → becomes the top recommendation
 await page.click("button:has-text('Release Hold')")
-await page.waitForSelector("text=Next after current", { timeout: 5000 })
-check("released hold appears under NEXT AFTER CURRENT", true)
+await page.waitForSelector("[data-testid='recommended-2']:has-text('T-108')", {
+  timeout: 5000,
+})
+check("released hold becomes the top recommendation, ahead of normal FIFO", true)
 await page.screenshot({ path: `${shots}/adv-next-after-current.png` })
 
-// complete the current customer — the released hold is served AUTOMATICALLY
-await page.click(`${queues} button:has-text('Complete') >> nth=1`)
+// the employee explicitly calls the released customer
+await page.click("[data-testid='counter-card-2'] button:has-text('Call T-108')")
 await page.waitForTimeout(500)
 check(
-  "released customer (T-108) is auto-served before normal FIFO (T-113)",
-  (await page.locator(`${queues} button[title="View T-108's journey"]`).count()) >= 1 &&
-    (await page.locator("text=Next after current").count()) === 0
+  "explicit call serves released T-108 before normal FIFO (T-111, T-113)",
+  (await page.locator("[data-testid='now-serving-2']:has-text('T-108')").count()) === 1
 )
 
 // WhatsApp reflects the hold journey from actual state

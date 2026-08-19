@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dialog"
 import { formatDuration } from "@/lib/format"
 import { notifyTransient } from "@/lib/notifications"
-import { getNextEligibleCustomer } from "@/lib/queue-logic"
+import { getRecommendedCustomer } from "@/lib/queue-logic"
 import { useQueueStore } from "@/lib/queue-store"
 import { OVERRIDE_REASONS, type Customer, type OverrideReason } from "@/lib/types"
 import { useNow } from "@/hooks/use-now"
@@ -72,11 +72,11 @@ function CustomerRow({
       {recommended ? (
         <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
           <Check className="size-3" aria-hidden />
-          Serve Recommended
+          Call — recommended
         </span>
       ) : (
         <span className="shrink-0 text-[10px] font-medium text-muted-foreground">
-          select
+          call
         </span>
       )}
     </button>
@@ -84,9 +84,9 @@ function CustomerRow({
 }
 
 /**
- * QUEUE OVERRIDE — "Choose Another": the employee may serve a different
- * eligible customer instead of the system recommendation. The queue is never
- * reordered; the choice applies exactly once, then automation resumes.
+ * "Choose Another" — the employee explicitly CALLS an eligible customer.
+ * Calling the recommendation is the normal flow; calling anyone else is a
+ * queue override (confirmed, audited, never reorders the queue).
  */
 export function OverrideDialog({
   target,
@@ -98,7 +98,7 @@ export function OverrideDialog({
   onOpenJourney: (customerId: string) => void
 }) {
   const state = useQueueStore((s) => s.state)
-  const armOverride = useQueueStore((s) => s.armOverride)
+  const call = useQueueStore((s) => s.call)
   const now = useNow(1000)
   const [selectedId, setSelectedId] = useState<string | null>(
     target?.preselectedId ?? null
@@ -109,7 +109,7 @@ export function OverrideDialog({
   const counter = state.counters.find((c) => c.id === target.counterId)
   if (!counter) return null
 
-  const recommended = getNextEligibleCustomer(state, counter.id)
+  const recommended = getRecommendedCustomer(state, counter.id)
   const journeyGroup = counter.releasedQueue
     .concat(counter.priorityQueue)
     .filter((id) => id !== recommended?.id)
@@ -133,9 +133,10 @@ export function OverrideDialog({
 
   function pick(customer: Customer) {
     if (recommended && customer.id === recommended.id) {
-      // choosing the recommendation = pure automation, nothing to arm
-      notifyTransient(`${customer.token} stays next`, {
-        description: "The automated recommendation will be served as normal.",
+      // calling the recommendation — the normal, non-override flow
+      call(counter!.id, customer.id)
+      notifyTransient(`${customer.token} called at Counter ${counter!.id}`, {
+        description: `${customer.name} — the recommended customer.`,
       })
       close()
       return
@@ -145,11 +146,9 @@ export function OverrideDialog({
 
   function confirmOverride() {
     if (!selected) return
-    armOverride(counter!.id, selected.id, reason)
+    call(counter!.id, selected.id, reason)
     notifyTransient("Queue override", {
-      description: serving
-        ? `${selected.token} will be served next at Counter ${counter!.id} — the queue itself is unchanged.`
-        : `${selected.token} is now being served at Counter ${counter!.id}.`,
+      description: `${selected.token} called at Counter ${counter!.id} — the rest of the queue keeps its order.`,
     })
     close()
   }
@@ -166,7 +165,8 @@ export function OverrideDialog({
             </DialogTitle>
             <DialogDescription>
               This customer is not the system-recommended next customer. The
-              queue keeps its order — automation resumes after this service.
+              queue keeps its order — the recommendation returns for the next
+              call.
             </DialogDescription>
           </DialogHeader>
 
@@ -225,7 +225,7 @@ export function OverrideDialog({
             </Button>
             <Button onClick={confirmOverride}>
               <ArrowUpDown data-icon="inline-start" aria-hidden />
-              Serve {selected.token}
+              Call {selected.token}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -247,9 +247,7 @@ export function OverrideDialog({
             <span className="font-mono font-semibold text-foreground">
               {recommended?.token ?? "—"}
             </span>
-            {serving && (
-              <> · applies when {serving.token}&apos;s service finishes</>
-            )}
+            {serving && <> · finish {serving.token}&apos;s service first</>}
           </DialogDescription>
         </DialogHeader>
 

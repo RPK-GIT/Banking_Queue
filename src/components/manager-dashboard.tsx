@@ -341,12 +341,15 @@ export function ManagerDashboard({
     },
     {
       id: "overrides",
-      label: "Queue Overrides",
-      value: String(kpis.overrides),
+      label: "Recommendation Acceptance",
+      value:
+        kpis.calls > 0
+          ? `${Math.round(kpis.recommendationAcceptance * 1000) / 10}%`
+          : "—",
       sub:
         kpis.overrides > 0
-          ? `${Math.round(kpis.overrideRate * 1000) / 10}% of assignments`
-          : "automation only",
+          ? `${kpis.overrides} override call${kpis.overrides === 1 ? "" : "s"}`
+          : "no overrides",
       icon: ArrowUpDown,
     },
   ]

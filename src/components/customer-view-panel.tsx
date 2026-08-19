@@ -276,9 +276,11 @@ export function CustomerViewPanel({
                     ? "—"
                     : status.priority
                       ? "Next"
-                      : status.position !== null
-                        ? `#${status.position}`
-                        : "—"}
+                      : status.position === 1
+                        ? "#1 — you're next"
+                        : status.position !== null
+                          ? `#${status.position}`
+                          : "—"}
                 </span>
                 <span className="text-muted-foreground">Est. wait</span>
                 <span className="text-right font-medium tabular-nums">

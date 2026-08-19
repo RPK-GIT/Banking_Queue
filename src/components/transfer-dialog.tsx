@@ -40,8 +40,8 @@ export function TransferDialog({ customerId, onClose }: TransferDialogProps) {
     const result = transfer(customer.id, destination)
     notifyTransient(`${customer.token} transferred`, {
       kind: "success",
-      description: result.assignedImmediately
-        ? `Counter ${destination} was free — now being served immediately.`
+      description: result.recommendedNext
+        ? `Now the recommended customer at Counter ${destination} — waiting for the employee's call.`
         : result.tier === "priority"
           ? `Journey in progress — priority position #${result.position} at Counter ${destination}.`
           : `Joined Counter ${destination}'s new requests at position #${result.position}.`,
@@ -62,8 +62,8 @@ export function TransferDialog({ customerId, onClose }: TransferDialogProps) {
           <DialogDescription>
             The customer keeps their token. A started journey joins the
             destination&apos;s <strong>Journey in Progress</strong> queue —
-            ahead of new requests, FIFO within the group. A free counter serves
-            them immediately.
+            ahead of new requests, FIFO within the group. They are served only
+            when the destination employee calls them.
           </DialogDescription>
         </DialogHeader>
 
@@ -120,8 +120,8 @@ export function TransferDialog({ customerId, onClose }: TransferDialogProps) {
                     {onBreak
                       ? "☕ employee on break — will wait"
                       : busy
-                        ? `priority — served after ${aheadCount + 1} customer${aheadCount ? "s" : ""}`
-                        : "free — served immediately"}
+                        ? `priority — recommended after ${aheadCount + 1} customer${aheadCount ? "s" : ""}`
+                        : "free — becomes the recommended customer"}
                   </p>
                 </button>
               )

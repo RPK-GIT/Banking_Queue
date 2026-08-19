@@ -94,17 +94,17 @@ export function CustomerCard({
                 render={
                   <button
                     type="button"
-                    aria-label={`Serve ${customer.token} next (queue override)`}
+                    aria-label={`Call ${customer.token} (queue override)`}
                     onClick={() => onServeNext(customer.id)}
                     className="flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground outline-none hover:bg-violet-50 hover:text-violet-700 focus-visible:ring-2 focus-visible:ring-ring/60"
                   />
                 }
               >
                 <ArrowUpDown className="size-3" aria-hidden />
-                Serve
+                Call
               </TooltipTrigger>
               <TooltipContent>
-                Serve this customer next — queue override, order preserved
+                Call this customer — confirms a queue override, order preserved
               </TooltipContent>
             </Tooltip>
           )}

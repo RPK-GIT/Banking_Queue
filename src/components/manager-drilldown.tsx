@@ -81,9 +81,9 @@ const TITLES: Record<
     note: "Hold events, durations, reasons and employee break time. Neither holds nor breaks are ever counted as employee processing time.",
   },
   overrides: {
-    title: "Queue Overrides",
+    title: "Recommendations & Overrides",
     icon: ArrowUpDown,
-    note: "Every manual override of the automated recommendation — an operational metric, not a verdict. Overrides never reorder the queue; automation resumes immediately after.",
+    note: "Every service starts with an explicit employee call. Acceptance = calls that followed the system recommendation; overrides are an operational metric, not a verdict, and never reorder the queue.",
   },
 }
 
@@ -506,25 +506,31 @@ export function ManagerDrilldownDialog({
   if (kpi === "overrides") {
     const info = overrideBreakdown(state, now, filters)
     const pct = Math.round(info.rate * 1000) / 10
+    const acceptancePct = Math.round(info.acceptanceRate * 1000) / 10
     body = (
       <div className="flex flex-col gap-3">
-        <div className="grid grid-cols-3 gap-2">
-          <StatTile label="Manual overrides" value={String(info.overrides)} />
+        <div className="grid grid-cols-4 gap-2">
           <StatTile
-            label="Total assignments"
-            value={String(info.assignments)}
-            sub="automatic + manual"
+            label="Recommendations"
+            value={String(info.recommendations)}
+            sub="one consumed per call"
           />
           <StatTile
-            label="Override rate"
-            value={info.assignments > 0 ? `${pct}%` : "—"}
-            sub="operational metric, not a verdict"
+            label="Customer calls"
+            value={String(info.calls)}
+            sub="explicit employee actions"
+          />
+          <StatTile label="Override calls" value={String(info.overrides)} />
+          <StatTile
+            label="Acceptance rate"
+            value={info.calls > 0 ? `${acceptancePct}%` : "—"}
+            sub="calls following the recommendation"
           />
         </div>
         {info.rate >= 0.1 && info.overrides > 0 && (
           <p className="rounded-lg border border-sky-200 bg-sky-50/60 px-3 py-2 text-[11px] text-sky-900">
-            <strong>{pct}% of assignments were manually overridden.</strong>{" "}
-            Employees are frequently deviating from automated recommendations —
+            <strong>{pct}% of calls overrode the recommendation.</strong>{" "}
+            Employees are frequently deviating from system recommendations —
             worth investigating the operational context, not a misuse signal.
           </p>
         )}

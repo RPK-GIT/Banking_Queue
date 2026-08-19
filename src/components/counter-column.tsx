@@ -26,7 +26,7 @@ import {
 import { CustomerCard } from "@/components/customer-card"
 import { stepProcessingMs } from "@/lib/durations"
 import { formatDuration } from "@/lib/format"
-import { getNextEligibleCustomer, waitingCount } from "@/lib/queue-logic"
+import { getRecommendedCustomer } from "@/lib/queue-logic"
 import { useQueueStore } from "@/lib/queue-store"
 import type { Counter } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -54,12 +54,11 @@ export function CounterColumn({
 }: CounterColumnProps) {
   const state = useQueueStore((s) => s.state)
   const customers = state.customers
-  const callNext = useQueueStore((s) => s.callNext)
+  const call = useQueueStore((s) => s.call)
   const completeService = useQueueStore((s) => s.completeService)
   const release = useQueueStore((s) => s.release)
   const beginBreak = useQueueStore((s) => s.beginBreak)
   const finishBreak = useQueueStore((s) => s.finishBreak)
-  const clearOverride = useQueueStore((s) => s.clearOverride)
   const [showAll, setShowAll] = useState(false)
 
   const onBreak = counter.status === "on-break"
@@ -68,10 +67,7 @@ export function CounterColumn({
     : null
   const servingStep = serving?.journey[serving.journey.length - 1]
 
-  const recommended = getNextEligibleCustomer(state, counter.id)
-  const overrideTarget = counter.nextOverrideId
-    ? customers[counter.nextOverrideId]
-    : null
+  const recommended = getRecommendedCustomer(state, counter.id)
 
   const hiddenCount = counter.queue.length - VISIBLE_QUEUE_LIMIT
   const visibleQueue =
@@ -81,13 +77,12 @@ export function CounterColumn({
   /** NEW REQUESTS positions sit behind the released + priority tiers */
   const newOffset = counter.releasedQueue.length + counter.priorityQueue.length
 
-  function handleCallNext() {
-    const called = callNext(counter.id)
-    if (called) {
-      notifyTransient(`${called.token} called at Counter ${counter.id}`, {
-        description: `${called.name} — ${called.serviceType}`,
-      })
-    }
+  function handleCallRecommended() {
+    if (!recommended) return
+    const called = call(counter.id, recommended.id)
+    notifyTransient(`${called.token} called at Counter ${counter.id}`, {
+      description: `${called.name} — ${called.serviceType}`,
+    })
   }
 
   function handleComplete() {
@@ -95,7 +90,8 @@ export function CounterColumn({
     const completed = completeService(counter.id)
     notifyTransient(`${completed.token} journey completed`, {
       kind: "success",
-      description: "The next eligible customer is assigned automatically.",
+      description:
+        "The system recommends the next customer — call when ready.",
     })
   }
 
@@ -321,99 +317,83 @@ export function CounterColumn({
               exit={{ opacity: 0 }}
               className="mt-1.5"
             >
-              <div className="rounded-lg border border-dashed px-2.5 py-1.5 text-center text-xs text-muted-foreground">
-                {onBreak
-                  ? "Counter unavailable"
-                  : waitingCount(counter) > 0
-                    ? "Assigning…"
-                    : "Counter free — next customer starts automatically"}
-              </div>
-              {!onBreak && waitingCount(counter) > 0 && (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        size="xs"
-                        variant="secondary"
-                        className="mt-1.5 w-full"
-                        onClick={handleCallNext}
-                      />
-                    }
-                  >
-                    <BellRing data-icon="inline-start" aria-hidden />
-                    Call Next (manual)
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    Assignment is automatic — this manual fallback follows the
-                    same journey-aware order
-                  </TooltipContent>
-                </Tooltip>
+              {onBreak ? (
+                <div className="rounded-lg border border-dashed px-2.5 py-1.5 text-center text-xs text-muted-foreground">
+                  Counter unavailable
+                </div>
+              ) : recommended ? (
+                /* RECOMMENDATION ≠ ASSIGNMENT — the customer is still
+                   waiting; only the explicit Call below starts service */
+                <div
+                  data-testid={`recommended-${counter.id}`}
+                  className="rounded-lg border border-dashed border-emerald-400 bg-emerald-50/50 px-2.5 py-1.5"
+                >
+                  <p className="text-[10px] font-semibold tracking-wide text-emerald-700 uppercase">
+                    Next recommended
+                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-sm font-bold text-emerald-800">
+                      {recommended.token}
+                    </span>
+                    <span className="font-mono text-[11px] tabular-nums text-emerald-700/80">
+                      waiting{" "}
+                      {formatDuration(
+                        now -
+                          recommended.journey[recommended.journey.length - 1]
+                            .enteredAt
+                      )}
+                    </span>
+                  </div>
+                  <p className="truncate text-[13px] font-medium text-emerald-950">
+                    {recommended.name}
+                  </p>
+                  <p className="truncate text-[11px] text-emerald-800/70">
+                    {recommended.journey.length > 1
+                      ? `Journey already started · from Counter ${recommended.journey[recommended.journey.length - 2].counterId}`
+                      : "New request"}
+                  </p>
+                  <div className="mt-1.5 flex flex-col gap-1">
+                    <Button
+                      size="xs"
+                      onClick={handleCallRecommended}
+                      className="w-full bg-emerald-600 text-white hover:bg-emerald-700"
+                    >
+                      <BellRing data-icon="inline-start" aria-hidden />
+                      Call {recommended.token}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => onOverride(counter.id)}
+                      className="w-full"
+                    >
+                      ↕ Choose Another
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed px-2.5 py-1.5 text-center text-xs text-muted-foreground">
+                  No customers waiting — counter available
+                </div>
               )}
             </motion.div>
           )}
         </AnimatePresence>
       </div>
 
-      {/* NEXT RECOMMENDED — automation's pick; the employee may Choose Another */}
+      {/* passive preview while serving — the recommendation is NOT assigned */}
       {serving && !onBreak && recommended && (
-        <div
-          className={cn(
-            "shrink-0 border-b px-3 py-1.5",
-            overrideTarget ? "bg-violet-50/50" : "bg-emerald-50/40"
-          )}
-        >
-          {overrideTarget ? (
-            <>
-              <p className="flex items-center gap-1 text-[10px] font-semibold tracking-wide text-violet-700 uppercase">
-                <ArrowRightLeft className="size-3 rotate-90" aria-hidden />
-                Up next — queue override
-              </p>
-              <div className="mt-0.5 flex items-center justify-between gap-2">
-                <p className="min-w-0 truncate text-[11px]">
-                  <span className="font-mono font-semibold text-violet-800">
-                    {overrideTarget.token}
-                  </span>{" "}
-                  <span className="text-violet-950">{overrideTarget.name}</span>
-                </p>
-                <button
-                  type="button"
-                  onClick={() => clearOverride(counter.id)}
-                  className="shrink-0 rounded-md border border-violet-300 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 outline-none hover:bg-violet-100 focus-visible:ring-2 focus-visible:ring-ring/60"
-                >
-                  ✓ Serve Recommended
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="text-[10px] font-semibold tracking-wide text-emerald-700 uppercase">
-                Next recommended
-              </p>
-              <div className="mt-0.5 flex items-center justify-between gap-2">
-                <p className="min-w-0 truncate text-[11px]">
-                  <span className="font-mono font-semibold text-emerald-800">
-                    {recommended.token}
-                  </span>{" "}
-                  <span className="text-emerald-950">{recommended.name}</span>
-                  <span className="text-emerald-800/60">
-                    {" "}
-                    ·{" "}
-                    {recommended.journey.length > 1
-                      ? `journey · from C${recommended.journey[recommended.journey.length - 2].counterId}`
-                      : "new request"}
-                  </span>
-                </p>
-                <button
-                  type="button"
-                  onClick={() => onOverride(counter.id)}
-                  aria-label={`Choose another customer — Counter ${counter.id}`}
-                  className="shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
-                >
-                  ↕ Choose Another
-                </button>
-              </div>
-            </>
-          )}
+        <div className="shrink-0 border-b bg-emerald-50/40 px-3 py-1">
+          <p className="truncate text-[11px]">
+            <span className="text-[10px] font-semibold tracking-wide text-emerald-700 uppercase">
+              Next recommended
+            </span>{" "}
+            <span className="font-mono font-semibold text-emerald-800">
+              {recommended.token}
+            </span>{" "}
+            <span className="text-emerald-950">{recommended.name}</span>
+            <span className="text-emerald-800/60"> · still waiting</span>
+          </p>
         </div>
       )}
 
@@ -491,26 +471,26 @@ export function CounterColumn({
                       stop {customer.journey.length} of a continuing journey
                     </p>
                   </button>
-                  {!onBreak && (
-                    <div className="mt-1 flex items-center gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+                  <div className="mt-1 flex items-center gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+                    {!onBreak && !serving && (
                       <button
                         type="button"
-                        aria-label={`Serve ${customer.token} next (queue override)`}
+                        aria-label={`Call ${customer.token} (queue override)`}
                         onClick={() => onOverride(counter.id, customer.id)}
                         className="rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground outline-none hover:bg-violet-50 hover:text-violet-700 focus-visible:ring-2 focus-visible:ring-ring/60"
                       >
-                        Serve
+                        Call
                       </button>
-                      <button
-                        type="button"
-                        aria-label={`Transfer ${customer.token} to another counter`}
-                        onClick={() => onTransfer(customer.id)}
-                        className="rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
-                      >
-                        Transfer
-                      </button>
-                    </div>
-                  )}
+                    )}
+                    <button
+                      type="button"
+                      aria-label={`Transfer ${customer.token} to another counter`}
+                      onClick={() => onTransfer(customer.id)}
+                      className="rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+                    >
+                      Transfer
+                    </button>
+                  </div>
                 </div>
               )
             })}
@@ -541,7 +521,7 @@ export function CounterColumn({
                   now={now}
                   onSelect={onSelectCustomer}
                   onServeNext={
-                    onBreak
+                    onBreak || serving
                       ? undefined
                       : (id) => onOverride(counter.id, id)
                   }

@@ -1,7 +1,8 @@
-// Validates the journey-aware queue engine in a real browser: automatic
-// assignment, priority transfer placement, customer hold + release priority,
-// employee break/resume, WhatsApp state sync, demo pause/resume — at three
-// resolutions with zero console errors and no duplicate events.
+// Validates the manual-call queue model in a real browser: RECOMMENDATION ≠
+// ASSIGNMENT — the system recommends, the employee explicitly calls. Covers
+// journey-aware recommendations, override calls, hold, employee break,
+// WhatsApp state sync and demo pause/resume — at three resolutions with zero
+// console errors and no duplicate events.
 import { chromium } from "playwright"
 
 const url = process.env.APP_URL ?? "http://localhost:3005"
@@ -52,6 +53,13 @@ function nowServing(counterId, token) {
     : `[data-testid='now-serving-${counterId}']`
 }
 
+/** the NEXT RECOMMENDED panel of an available counter */
+function recommendedPanel(counterId, token) {
+  return token
+    ? `[data-testid='recommended-${counterId}']:has-text('${token}')`
+    : `[data-testid='recommended-${counterId}']`
+}
+
 function counterCard(counterId) {
   return `[data-testid='counter-card-${counterId}']`
 }
@@ -90,105 +98,146 @@ await page.waitForSelector(`${queues} >> text=Counter 4`, { timeout: 30000 })
 await page.click("button:has-text('Clear All')")
 await page.waitForTimeout(400)
 
-// 1–3: customer arrives at an idle counter → assigned automatically
+// ---- 1–7: recommendation ≠ assignment, explicit call ----
 await issueCustomer("Probe One", "Counter 1")
+await page.waitForSelector(recommendedPanel(1, "T-101"), { timeout: 5000 })
+check(
+  "arriving customer is RECOMMENDED, not assigned (still waiting)",
+  (await page.locator(nowServing(1)).count()) === 0
+)
+const waitingStatus = await page
+  .locator("aside[aria-label='Customer view']")
+  .innerText()
+check(
+  "WhatsApp shows Waiting (you're next) for the recommended customer",
+  waitingStatus.includes("Waiting") && !waitingStatus.includes("Being served")
+)
+await page.click(`${counterCard(1)} button:has-text('Call T-101')`)
 await page.waitForSelector(nowServing(1, "T-101"), { timeout: 5000 })
-check("arriving customer is auto-assigned at the idle counter (no Call Next)", true)
+check("explicit Call moves the customer to NOW SERVING", true)
+const servingStatus = await page
+  .locator("aside[aria-label='Customer view']")
+  .innerText()
+check("WhatsApp switches to Being served only after the call", servingStatus.includes("Being served"))
 
-// 4–5: completion automatically brings the next customer in
+// ---- 8–10: completion recommends the next customer, never assigns ----
 await issueCustomer("Probe Two", "Counter 1")
 await page.click(`${counterCard(1)} button:has-text('Complete')`)
-await page.waitForSelector(nowServing(1, "T-102"), { timeout: 5000 })
-check("completion auto-assigns the next waiting customer", true)
+await page.waitForSelector(recommendedPanel(1, "T-102"), { timeout: 5000 })
+// the previous serving card animates out — wait for it to fully leave
+await page.waitForSelector(nowServing(1), { state: "detached", timeout: 5000 })
+check("completion produces the next RECOMMENDATION — no automatic assignment", true)
 
-// 6: journey-started transfer lands in the JOURNEY IN PROGRESS priority queue
-await issueCustomer("Probe Three", "Counter 1") // waits behind Probe Two
-await issueCustomer("Probe Four", "Counter 2") // serving at Counter 2
-await page.click(`${counterCard(1)} button:has-text('Transfer')`) // Probe Two
+// ---- 11–16: Choose Another → override call → original priority restored ----
+await issueCustomer("Probe Three", "Counter 1") // waits behind T-102
+await page.click(`${counterCard(1)} button:has-text('Choose Another')`)
+await page.waitForSelector("text=Choose Customer — Counter 1", { timeout: 5000 })
+await page.click("div[data-slot='dialog-content'] button:has-text('T-103')")
+await page.waitForSelector("text=Override Queue Order?", { timeout: 5000 })
+check("override confirmation shows recommended vs selected", true)
+await page.click("button:has-text('Customer ready')") // optional reason
+await page.click("button:has-text('Call T-103')")
+await page.waitForSelector(nowServing(1, "T-103"), { timeout: 5000 })
+check(
+  "override call serves T-103; recommended T-102 keeps position #1",
+  (await page.locator(`${counterCard(1)} >> text=#1 in queue`).count()) === 1 &&
+    (await page.locator(`${counterCard(1)} >> text=T-102`).count()) >= 1
+)
+await page.click(`${counterCard(1)} button:has-text('Complete')`)
+await page.waitForSelector(recommendedPanel(1, "T-102"), { timeout: 5000 })
+await page.waitForSelector(nowServing(1), { state: "detached", timeout: 5000 })
+check(
+  "after the override completes, T-102 is recommended again — still unassigned",
+  true
+)
+await page.click("button[aria-label^='Toggle live activity']")
+await page.waitForSelector("text=Live Activity", { timeout: 5000 })
+check(
+  "Live Activity records the override (called T-103 instead of recommended T-102)",
+  (await page.locator("text=/called T-103 .* instead of recommended T-102/").count()) === 1
+)
+await page.click("button[aria-label='Close activity panel']")
+await page.waitForTimeout(300)
+await page.click(`${counterCard(1)} button:has-text('Call T-102')`)
+await page.waitForSelector(nowServing(1, "T-102"), { timeout: 5000 })
+
+// ---- 17–18: transfer to an IDLE counter → recommendation, not assignment ----
+await page.click(`${counterCard(1)} button:has-text('Transfer')`)
 await page.waitForSelector("text=Transfer to Another Counter", { timeout: 5000 })
 await page.click("div[data-slot='dialog-content'] button:has-text('Counter 2')")
 await page.click("button:has-text('Transfer Customer')")
-await page.waitForSelector(`${counterCard(2)} >> text=Journey in progress`, {
-  timeout: 5000,
-})
-check("journey-started transfer enters the priority queue (not new requests)", true)
-await page.waitForSelector(nowServing(1, "T-103"), { timeout: 5000 })
-check("freed origin counter auto-assigns its next customer (Probe Three)", true)
-await page.screenshot({ path: `${shots}/core-priority-queue.png` })
+await page.waitForSelector(recommendedPanel(2, "T-102"), { timeout: 5000 })
+check(
+  "transfer to idle counter creates a recommendation — NOT Now Serving",
+  (await page.locator(nowServing(2)).count()) === 0
+)
+await page.click(`${counterCard(2)} button:has-text('Call T-102')`)
+await page.waitForSelector(nowServing(2, "T-102"), { timeout: 5000 })
+check("transferred customer served only after the explicit call", true)
+await page.screenshot({ path: `${shots}/core-recommendation.png` })
 
-// 7–8: hold the current customer → next eligible auto-assigned
-await page.click(`${counterCard(2)} button:has-text('Hold')`) // Probe Four
+// ---- 19–20: hold frees the counter without assigning anyone ----
+await issueCustomer("Probe Four", "Counter 2") // waits (T-104)
+await page.click(`${counterCard(2)} button:has-text('Hold')`)
 await page.waitForSelector("text=Put on Hold", { timeout: 5000 })
 await page.click("button:has-text('Verification pending')")
 await page.click("div[data-slot='dialog-content'] button:has-text('Put on Hold')")
 await page.waitForSelector(`${counterCard(2)} >> text=On hold · 1`, { timeout: 5000 })
-check("held customer appears in the dedicated ON HOLD section", true)
-await page.waitForSelector(nowServing(2, "T-102"), { timeout: 5000 })
+await page.waitForSelector(nowServing(2), { state: "detached", timeout: 5000 })
 check(
-  "hold auto-assigns the next eligible customer (priority T-102)",
-  (await page.locator(`${counterCard(2)} >> text=Journey in progress`).count()) === 0
+  "hold frees the counter — T-104 is recommended, nobody auto-assigned",
+  (await page.locator(recommendedPanel(2, "T-104")).count()) === 1
 )
 
-// 9–10: release → NEXT AFTER CURRENT
+// release → NEXT AFTER CURRENT → top recommendation, explicit call resumes
 await page.click("button:has-text('Release Hold')")
-await page.waitForSelector(`${counterCard(2)} >> text=Next after current`, {
-  timeout: 5000,
-})
+await page.waitForSelector(recommendedPanel(2, "T-102"), { timeout: 5000 })
 check(
-  "released hold becomes NEXT AFTER CURRENT without interrupting",
-  (await page.locator(nowServing(2, "T-102")).count()) === 1
+  "released hold becomes the top recommendation — still not assigned",
+  (await page.locator(nowServing(2)).count()) === 0
 )
-await page.screenshot({ path: `${shots}/core-next-after-current.png` })
+await page.click(`${counterCard(2)} button:has-text('Call T-102')`)
+await page.waitForSelector(nowServing(2, "T-102"), { timeout: 5000 })
+check("explicit call resumes the released customer before normal FIFO", true)
 
-// 11–12: complete current → held customer automatically served
-await page.click(`${counterCard(2)} button:has-text('Complete')`)
-await page.waitForSelector(nowServing(2, "T-104"), { timeout: 5000 })
-check(
-  "released customer is automatically assigned after the current completes",
-  (await page.locator(`${counterCard(2)} >> text=Next after current`).count()) === 0
-)
-
-// 13–15: employee break — counter unavailable, service paused, no reassignment
-await issueCustomer("Probe Five", "Counter 2") // waits behind the resumed T-104
+// ---- 21–24: employee break — no calls possible until resume ----
 await page.click("button[aria-label='Start break — Arjun']")
 await page.waitForSelector(`${counterCard(2)} >> text=Employee on break`, {
   timeout: 5000,
 })
-check("counter shows EMPLOYEE ON BREAK", true)
 check(
-  "current customer's service pauses (kept in place, not re-queued)",
-  (await page.locator(`${counterCard(2)} >> text="SERVICE PAUSED"`).count()) === 1 &&
-    (await page.locator(nowServing(2, "T-104")).count()) === 1
+  "break pauses the current service (kept in place)",
+  (await page.locator(`${counterCard(2)} >> text="SERVICE PAUSED"`).count()) === 1
 )
-await page.waitForTimeout(1200)
+await page.waitForTimeout(1000)
 check(
-  "no new customer is assigned while the employee is on break",
-  (await page.locator(nowServing(2, "T-104")).count()) === 1 &&
-    (await page.locator(nowServing(2, "T-105")).count()) === 0
+  "no customer is assigned during the break",
+  (await page.locator(nowServing(2, "T-102")).count()) === 1 &&
+    (await page.locator(nowServing(2, "T-104")).count()) === 0
 )
-await page.screenshot({ path: `${shots}/core-employee-break.png` })
-
-// 16–17: resume → the SAME customer continues
 await page.click("button:has-text('Resume Service')")
 await page.waitForTimeout(400)
 check(
-  "original customer resumes after the break (not the waiting one)",
-  (await page.locator(nowServing(2, "T-104")).count()) === 1 &&
-    (await page.locator(`${counterCard(2)} >> text="SERVICE PAUSED"`).count()) === 0
+  "resume restores the SAME paused customer",
+  (await page.locator(nowServing(2, "T-102")).count()) === 1
 )
-
-// 18–19: completion after break auto-assigns next
 await page.click(`${counterCard(2)} button:has-text('Complete')`)
-await page.waitForSelector(nowServing(2, "T-105"), { timeout: 5000 })
-check("completion after the break auto-assigns the next customer", true)
+await page.waitForSelector(recommendedPanel(2, "T-104"), { timeout: 5000 })
+await page.waitForSelector(nowServing(2), { state: "detached", timeout: 5000 })
+check(
+  "after completion the waiting customer is recommended — explicit call required",
+  true
+)
+await page.click(`${counterCard(2)} button:has-text('Call T-104')`)
+await page.waitForSelector(nowServing(2, "T-104"), { timeout: 5000 })
 
-// 20: WhatsApp reflects the full hold + pause story from actual state
-await pickOption("button[aria-label='Select customer']", "T-104")
+// WhatsApp reflects the full story from actual state — no duplicates
+await pickOption("button[aria-label='Select customer']", "T-102")
 const conversation = await page
   .locator("[data-testid='wa-conversation']")
   .innerText()
 check(
-  "WhatsApp shows hold with reason, resume, pause and resume messages",
+  "WhatsApp documents hold (with reason), resume, pause and service resume",
   conversation.includes("temporarily on hold") &&
     conversation.includes("Verification pending") &&
     conversation.includes("has been resumed") &&
@@ -201,87 +250,28 @@ check(
     conversation.split("temporarily paused").length === 2
 )
 
-// ---- QUEUE OVERRIDE: automation → human judgment → automation resumes ----
-// Counter 2 is serving T-105; give it two waiting customers
-await issueCustomer("Probe Six", "Counter 2") // T-106 — recommended next
-await issueCustomer("Probe Seven", "Counter 2") // T-107 — lower priority
-check(
-  "counter shows the NEXT RECOMMENDED customer (T-106)",
-  (await page.locator(`${counterCard(2)} >> text=Next recommended`).count()) === 1 &&
-    (await page.locator(`${counterCard(2)} >> text=T-106`).count()) >= 1
-)
-
-// Choose Another → select the lower-priority customer → confirm
-await page.click("button[aria-label='Choose another customer — Counter 2']")
-await page.waitForSelector("text=Choose Customer — Counter 2", { timeout: 5000 })
-check(
-  "Choose Customer panel shows the recommended customer and groups",
-  (await page.locator("div[data-slot='dialog-content'] >> text=Serve Recommended").count()) >= 1 &&
-    (await page.locator("div[data-slot='dialog-content'] >> text=New requests").count()) === 1
-)
-await page.click("div[data-slot='dialog-content'] button:has-text('T-107')")
-await page.waitForSelector("text=Override Queue Order?", { timeout: 5000 })
-await page.click("button:has-text('Customer ready')") // optional reason
-await page.click("button:has-text('Serve T-107')")
-await page.waitForSelector(`${counterCard(2)} >> text=queue override`, { timeout: 5000 })
-check("override armed — counter shows UP NEXT (override) with T-107", true)
-
-// completion applies the override; the bypassed customer keeps position #1
-await page.click(`${counterCard(2)} button:has-text('Complete')`)
-await page.waitForSelector(nowServing(2, "T-107"), { timeout: 5000 })
-check(
-  "override serves T-107; recommended T-106 keeps its original position",
-  (await page.locator(`${counterCard(2)} >> text=#1 in queue`).count()) === 1 &&
-    (await page.locator(`${counterCard(2)} >> text=T-106`).count()) >= 1
-)
-
-// the override lands in Live Activity
-await page.click("button[aria-label^='Toggle live activity']")
-await page.waitForSelector("text=Live Activity", { timeout: 5000 })
-check(
-  "Live Activity records the override (employee, selected vs recommended)",
-  (await page.locator("text=/Arjun at Counter 2 manually selected T-107 instead of recommended T-106/").count()) === 1
-)
-await page.click("button[aria-label='Close activity panel']")
-await page.waitForTimeout(300)
-
-// automation resumes with the original recommendation
-await page.click(`${counterCard(2)} button:has-text('Complete')`)
-await page.waitForSelector(nowServing(2, "T-106"), { timeout: 5000 })
-check("after the override completes, automation serves the original T-106", true)
-
-// transfer from the queue — journey-aware placement at the destination
-await issueCustomer("Probe Eight", "Counter 2") // waits at C2 (T-108)
-await page
-  .locator("button[aria-label='Transfer T-108 to another counter']")
-  .click({ force: true })
-await page.waitForSelector("text=Transfer to Another Counter", { timeout: 5000 })
-await page.click("div[data-slot='dialog-content'] button:has-text('Counter 3')")
-await page.click("button:has-text('Transfer Customer')")
-await page.waitForSelector(nowServing(3, "T-108"), { timeout: 5000 })
-check("transfer from queue works — idle destination serves immediately", true)
-
-// Manager Dashboard: Queue Overrides KPI + drill-down
+// ---- Manager Dashboard: acceptance KPI + override drill-down ----
 await page.click("button:has-text('Manager Dashboard')")
 await page.waitForSelector("text=Employee Workload", { timeout: 5000 })
 check(
-  "Queue Overrides KPI counts the manual override",
-  (await page.locator("button[aria-label='Queue Overrides — drill down'] >> text=1").count()) >= 1
+  "Recommendation Acceptance KPI is shown with the override call counted",
+  (await page.locator("button[aria-label='Recommendation Acceptance — drill down']").count()) === 1
 )
-await page.click("button[aria-label='Queue Overrides — drill down']")
+await page.click("button[aria-label='Recommendation Acceptance — drill down']")
 await page.waitForSelector("text=Override history", { timeout: 5000 })
 check(
-  "override drill-down shows employee, counter, recommended vs selected and reason",
-  (await page.locator("div[data-slot='dialog-content'] >> text=Arjun").count()) >= 1 &&
-    (await page.locator("div[data-slot='dialog-content'] >> text=T-106").count()) >= 1 &&
-    (await page.locator("div[data-slot='dialog-content'] >> text=T-107").count()) >= 1 &&
-    (await page.locator("div[data-slot='dialog-content'] >> text=Customer ready").count()) >= 1
+  "drill-down shows recommendations, calls, overrides and acceptance rate",
+  (await page.locator("div[data-slot='dialog-content'] >> text=Acceptance rate").count()) === 1 &&
+    (await page.locator("div[data-slot='dialog-content'] >> text=Recommendations").count()) >= 1
 )
 check(
-  "override rate is displayed",
-  (await page.locator("div[data-slot='dialog-content'] >> text=Override rate").count()) === 1
+  "override history records employee, counter, recommended vs selected, reason",
+  (await page.locator("div[data-slot='dialog-content'] >> text=Priya").count()) >= 1 &&
+    (await page.locator("div[data-slot='dialog-content'] >> text=T-102").count()) >= 1 &&
+    (await page.locator("div[data-slot='dialog-content'] >> text=T-103").count()) >= 1 &&
+    (await page.locator("div[data-slot='dialog-content'] >> text=Customer ready").count()) >= 1
 )
-await page.screenshot({ path: `${shots}/core-override-drilldown.png` })
+await page.screenshot({ path: `${shots}/core-acceptance-drilldown.png` })
 await page.keyboard.press("Escape")
 await page.waitForTimeout(300)
 await page.click("button:has-text('Operations')")
@@ -344,16 +334,13 @@ await page.screenshot({ path: `${shots}/core-demo-complete.png` })
 // the demo's scripted override (T-113 over T-111) is audited exactly once
 await page.click("button:has-text('Manager Dashboard')")
 await page.waitForSelector("text=Employee Workload", { timeout: 5000 })
-check(
-  "demo: Queue Overrides KPI shows exactly the one scripted override",
-  (await page.locator("button[aria-label='Queue Overrides — drill down'] >> text=1").count()) >= 1
-)
-await page.click("button[aria-label='Queue Overrides — drill down']")
+await page.click("button[aria-label='Recommendation Acceptance — drill down']")
 await page.waitForSelector("text=Override history", { timeout: 5000 })
 check(
-  "demo: override history records T-113 selected over recommended T-111",
+  "demo: override history records T-113 called over recommended T-111",
   (await page.locator("div[data-slot='dialog-content'] >> text=T-113").count()) >= 1 &&
-    (await page.locator("div[data-slot='dialog-content'] >> text=T-111").count()) >= 1
+    (await page.locator("div[data-slot='dialog-content'] >> text=T-111").count()) >= 1 &&
+    (await page.locator("div[data-slot='dialog-content'] >> text=Override calls").count()) === 1
 )
 await page.keyboard.press("Escape")
 

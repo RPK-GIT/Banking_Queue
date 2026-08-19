@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  callCustomer,
   callNextCustomer,
   completeCurrentService,
   emptyState,
+  getRecommendedCustomer,
   issueToken,
   queuePosition,
   transferCustomer,
@@ -23,40 +25,41 @@ function issue(
   return issueToken(state, { name, serviceType, counterId }, at)
 }
 
-describe("token issuing (Rules 1 & 2, automatic assignment)", () => {
-  it("assigns a new customer immediately when the counter is free", () => {
+describe("token issuing (Rules 1 & 2) — recommendation ≠ assignment", () => {
+  it("a new customer WAITS even at a free counter until explicitly called", () => {
     const state = emptyState()
     const customer = issue(state, "Asha", 1)
 
-    // idle counter + available employee → no artificial wait, no Call Next
-    expect(customer.status).toBe("serving")
-    expect(state.counters[0].currentCustomerId).toBe(customer.id)
-    expect(customer.journey[0].startedAt).toBe(T0)
-    expect(customer.currentCounterId).toBe(1)
+    // the system recommends — it never assigns
+    expect(customer.status).toBe("waiting")
+    expect(state.counters[0].currentCustomerId).toBeNull()
+    expect(state.counters[0].status).toBe("available")
+    expect(customer.journey[0].startedAt).toBeNull()
+    expect(getRecommendedCustomer(state, 1)?.id).toBe(customer.id)
   })
 
-  it("queues the second customer at position #1 while the first is served", () => {
+  it("an explicit call moves the customer to NOW SERVING", () => {
     const state = emptyState()
-    const first = issue(state, "First", 1)
-    const second = issue(state, "Second", 1, T0 + 1)
+    const customer = issue(state, "Asha", 1)
+    const called = callCustomer(state, 1, customer.id, T0 + 5)
 
-    expect(state.counters[0].currentCustomerId).toBe(first.id)
-    expect(state.counters[0].queue).toEqual([second.id])
-    expect(second.status).toBe("waiting")
-    expect(queuePosition(state, second.id)).toBe(1)
+    expect(called.id).toBe(customer.id)
+    expect(customer.status).toBe("serving")
+    expect(state.counters[0].currentCustomerId).toBe(customer.id)
+    expect(customer.journey[0].startedAt).toBe(T0 + 5) // call timestamp
   })
 
   it("keeps strict FIFO among new requests — later arrivals never jump ahead", () => {
     const state = emptyState()
-    issue(state, "Serving", 1)
+    const first = issue(state, "First", 1)
     const second = issue(state, "Second", 1, T0 + 1)
     const third = issue(state, "Third", 1, T0 + 2)
-    const fourth = issue(state, "Fourth", 1, T0 + 3)
 
-    expect(state.counters[0].queue).toEqual([second.id, third.id, fourth.id])
-    expect(queuePosition(state, second.id)).toBe(1)
-    expect(queuePosition(state, third.id)).toBe(2)
-    expect(queuePosition(state, fourth.id)).toBe(3)
+    expect(state.counters[0].queue).toEqual([first.id, second.id, third.id])
+    expect(queuePosition(state, first.id)).toBe(1)
+    expect(queuePosition(state, second.id)).toBe(2)
+    expect(queuePosition(state, third.id)).toBe(3)
+    expect(getRecommendedCustomer(state, 1)?.id).toBe(first.id)
   })
 
   it("assigns unique sequential tokens", () => {
@@ -69,131 +72,132 @@ describe("token issuing (Rules 1 & 2, automatic assignment)", () => {
   })
 })
 
-describe("automatic next assignment (journey-aware FIFO)", () => {
-  it("completion automatically assigns the next waiting customer — no Call Next", () => {
+describe("completion — recommends the next customer, never assigns", () => {
+  it("after completion the counter stays AVAILABLE with a fresh recommendation", () => {
     const state = emptyState()
     const first = issue(state, "First", 1)
     const second = issue(state, "Second", 1, T0 + 1)
+    callCustomer(state, 1, first.id, T0 + 5)
 
     completeCurrentService(state, 1, T0 + 10)
 
     expect(first.status).toBe("completed")
-    expect(second.status).toBe("serving")
-    expect(state.counters[0].currentCustomerId).toBe(second.id)
-    expect(state.counters[0].queue).toEqual([])
-  })
-
-  it("leaves the counter idle when nothing is waiting", () => {
-    const state = emptyState()
-    issue(state, "Only", 1)
-    completeCurrentService(state, 1, T0 + 10)
-
+    // NO automatic assignment — the second customer is only recommended
     expect(state.counters[0].currentCustomerId).toBeNull()
     expect(state.counters[0].status).toBe("available")
+    expect(second.status).toBe("waiting")
+    expect(getRecommendedCustomer(state, 1)?.id).toBe(second.id)
+
+    // the counter remains available until the employee explicitly calls
+    callCustomer(state, 1, second.id, T0 + 20)
+    expect(second.status).toBe("serving")
   })
 
-  it("manual Call Next still refuses while already serving (Rule 9)", () => {
+  it("calling while already serving is rejected (no double assignment)", () => {
     const state = emptyState()
-    issue(state, "First", 1)
-    issue(state, "Second", 1, T0 + 1)
+    const first = issue(state, "First", 1)
+    const second = issue(state, "Second", 1, T0 + 1)
+    callCustomer(state, 1, first.id, T0 + 5)
 
-    expect(() => callNextCustomer(state, 1, T0 + 20)).toThrow()
+    expect(() => callCustomer(state, 1, second.id, T0 + 10)).toThrow(
+      /already serving/
+    )
+  })
+
+  it("a customer cannot be called by two counters (single queue membership)", () => {
+    const state = emptyState()
+    const customer = issue(state, "Solo", 1)
+    // Counter 2 cannot call a customer waiting at Counter 1
+    expect(() => callCustomer(state, 2, customer.id, T0 + 5)).toThrow(
+      /not eligible/
+    )
+    callCustomer(state, 1, customer.id, T0 + 5)
+    // once serving, no counter can call them again
+    expect(() => callCustomer(state, 2, customer.id, T0 + 10)).toThrow(
+      /not eligible/
+    )
+  })
+
+  it("callNextCustomer calls exactly the recommendation (Rule 9)", () => {
+    const state = emptyState()
+    const first = issue(state, "First", 1)
+    issue(state, "Second", 1, T0 + 1)
+    const called = callNextCustomer(state, 1, T0 + 5)
+    expect(called?.id).toBe(first.id)
+    expect(callNextCustomer(state, 2, T0 + 6)).toBeNull() // empty counter
   })
 })
 
 describe("journey-aware transfers (Rules 4, 2, 8, 10)", () => {
   /** a customer being served at Counter 1 — their journey has started */
   function servingCustomerAtCounter1(state: QueueState) {
-    return issue(state, "Traveller", 1) // auto-assigned immediately
+    const traveller = issue(state, "Traveller", 1)
+    callCustomer(state, 1, traveller.id, T0 + 5)
+    return traveller
   }
 
   it("a started journey joins the destination's PRIORITY queue, ahead of new requests", () => {
     const state = emptyState()
     const traveller = servingCustomerAtCounter1(state)
     const servingAt4 = issue(state, "Serving At 4", 4, T0 + 1)
-    const existingA = issue(state, "Existing A", 4, T0 + 2)
-    const existingB = issue(state, "Existing B", 4, T0 + 3)
+    callCustomer(state, 4, servingAt4.id, T0 + 2)
+    const existingA = issue(state, "Existing A", 4, T0 + 3)
 
     const result = transferCustomer(state, traveller.id, 4, T0 + 10)
 
     expect(result.tier).toBe("priority")
-    expect(state.counters[3].currentCustomerId).toBe(servingAt4.id)
     expect(state.counters[3].priorityQueue).toEqual([traveller.id])
-    expect(state.counters[3].queue).toEqual([existingA.id, existingB.id])
-    // effective line: traveller first, then the new requests
+    expect(state.counters[3].queue).toEqual([existingA.id])
     expect(queuePosition(state, traveller.id)).toBe(1)
     expect(queuePosition(state, existingA.id)).toBe(2)
-    expect(queuePosition(state, existingB.id)).toBe(3)
   })
 
   it("priority customers keep their ARRIVAL order — never reordered by token number", () => {
     const state = emptyState()
-    // higher token number arrives at Counter 3 FIRST — must stay first
-    issue(state, "Busy At 3", 3) // keeps Counter 3 busy
-    const late = issue(state, "Late Token", 2, T0 + 5) // T-102, serving at C2
-    const early = issue(state, "Early Token", 1, T0 + 6) // T-103, serving at C1
+    const busy = issue(state, "Busy At 3", 3)
+    callCustomer(state, 3, busy.id, T0 + 1)
+    const late = issue(state, "Late Token", 2, T0 + 5) // higher token number
+    callCustomer(state, 2, late.id, T0 + 6)
+    const early = issue(state, "Early Token", 1, T0 + 7)
+    callCustomer(state, 1, early.id, T0 + 8)
 
     transferCustomer(state, late.id, 3, T0 + 10) // arrives first
     transferCustomer(state, early.id, 3, T0 + 20) // arrives second
 
     expect(state.counters[2].priorityQueue).toEqual([late.id, early.id])
-    expect(queuePosition(state, late.id)).toBe(1)
-    expect(queuePosition(state, early.id)).toBe(2)
-
     completeCurrentService(state, 3, T0 + 30)
-    expect(state.counters[2].currentCustomerId).toBe(late.id)
+    expect(getRecommendedCustomer(state, 3)?.id).toBe(late.id)
   })
 
-  it("priority queue is served before the normal queue on completion", () => {
-    const state = emptyState()
-    const serving = issue(state, "Serving", 2)
-    const normalA = issue(state, "Normal A", 2, T0 + 1)
-    const traveller = issue(state, "Traveller", 1, T0 + 2)
-    transferCustomer(state, traveller.id, 2, T0 + 10) // journey started → priority
-
-    completeCurrentService(state, 2, T0 + 20)
-
-    expect(serving.status).toBe("completed")
-    expect(state.counters[1].currentCustomerId).toBe(traveller.id)
-    expect(queuePosition(state, normalA.id)).toBe(1)
-  })
-
-  it("a never-started journey transfers into the normal NEW REQUESTS queue", () => {
-    const state = emptyState()
-    issue(state, "Busy At 1", 1)
-    const fresh = issue(state, "Fresh", 1, T0 + 1) // waiting — never started
-    issue(state, "Busy At 2", 2, T0 + 2)
-    const existing = issue(state, "Existing", 2, T0 + 3)
-
-    const result = transferCustomer(state, fresh.id, 2, T0 + 10)
-
-    expect(result.tier).toBe("normal")
-    expect(state.counters[1].queue).toEqual([existing.id, fresh.id])
-    expect(state.counters[1].priorityQueue).toEqual([])
-  })
-
-  it("transfer to an IDLE counter serves the customer immediately", () => {
+  it("transfer to an IDLE counter creates a RECOMMENDATION, not an assignment", () => {
     const state = emptyState()
     const traveller = servingCustomerAtCounter1(state)
 
     const result = transferCustomer(state, traveller.id, 4, T0 + 10)
 
-    expect(result.assignedImmediately).toBe(true)
+    // this is the key product change — nobody is served without a call
+    expect(result.recommendedNext).toBe(true)
+    expect(traveller.status).toBe("waiting")
+    expect(state.counters[3].currentCustomerId).toBeNull()
+    expect(state.counters[3].priorityQueue).toEqual([traveller.id])
+    expect(getRecommendedCustomer(state, 4)?.id).toBe(traveller.id)
+
+    // the employee must explicitly call the transferred customer
+    callCustomer(state, 4, traveller.id, T0 + 20)
     expect(traveller.status).toBe("serving")
-    expect(state.counters[3].currentCustomerId).toBe(traveller.id)
-    expect(traveller.journey[1].startedAt).toBe(T0 + 10)
+    expect(traveller.journey[1].startedAt).toBe(T0 + 20)
   })
 
-  it("the freed origin counter automatically assigns its own next customer", () => {
+  it("the freed origin counter gets a recommendation — no auto-call", () => {
     const state = emptyState()
     const traveller = servingCustomerAtCounter1(state)
     const waiting = issue(state, "Waiting At 1", 1, T0 + 1)
-    issue(state, "Busy At 2", 2, T0 + 2)
 
     transferCustomer(state, traveller.id, 2, T0 + 10)
 
-    expect(state.counters[0].currentCustomerId).toBe(waiting.id)
-    expect(waiting.status).toBe("serving")
+    expect(state.counters[0].currentCustomerId).toBeNull()
+    expect(waiting.status).toBe("waiting")
+    expect(getRecommendedCustomer(state, 1)?.id).toBe(waiting.id)
   })
 
   it("preserves the token and all previous counters in the journey", () => {
@@ -201,20 +205,20 @@ describe("journey-aware transfers (Rules 4, 2, 8, 10)", () => {
     const traveller = servingCustomerAtCounter1(state)
     const token = traveller.token
 
-    transferCustomer(state, traveller.id, 4, T0 + 10) // idle → serving at C4
-    transferCustomer(state, traveller.id, 3, T0 + 30) // idle → serving at C3
+    transferCustomer(state, traveller.id, 4, T0 + 10)
+    callCustomer(state, 4, traveller.id, T0 + 20)
+    transferCustomer(state, traveller.id, 3, T0 + 30)
 
     expect(traveller.token).toBe(token)
     expect(traveller.journey.map((s) => s.counterId)).toEqual([1, 4, 3])
     expect(traveller.journey[0].status).toBe("completed")
     expect(traveller.journey[1].status).toBe("completed")
-    expect(traveller.journey[2].status).toBe("serving")
+    expect(traveller.journey[2].status).toBe("waiting")
   })
 
   it("customer is at exactly one counter after a transfer (Rule 8)", () => {
     const state = emptyState()
     const traveller = servingCustomerAtCounter1(state)
-    issue(state, "Busy At 2", 2, T0 + 1)
 
     transferCustomer(state, traveller.id, 2, T0 + 10)
 
@@ -229,7 +233,7 @@ describe("journey completion (Rules 5 & 6)", () => {
   it("does NOT complete the customer when one counter finishes (transfer)", () => {
     const state = emptyState()
     const traveller = issue(state, "Traveller", 1)
-    issue(state, "Busy At 4", 4, T0 + 1) // keep destination busy
+    callCustomer(state, 1, traveller.id, T0 + 5)
 
     transferCustomer(state, traveller.id, 4, T0 + 10)
 
@@ -241,7 +245,9 @@ describe("journey completion (Rules 5 & 6)", () => {
   it("marks the customer Completed only on final completion", () => {
     const state = emptyState()
     const traveller = issue(state, "Traveller", 1)
-    transferCustomer(state, traveller.id, 4, T0 + 10) // idle → serving
+    callCustomer(state, 1, traveller.id, T0 + 5)
+    transferCustomer(state, traveller.id, 4, T0 + 10)
+    callCustomer(state, 4, traveller.id, T0 + 20)
 
     const completed = completeCurrentService(state, 4, T0 + 30)
 

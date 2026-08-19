@@ -15,6 +15,7 @@ import {
 } from "./analytics"
 import { demoWindowMs, employeeCapacityMs } from "./capacity"
 import {
+  callNextCustomer,
   completeCurrentService,
   emptyState,
   endBreak,
@@ -154,18 +155,19 @@ describe("manager filters (time / employee / counter / service)", () => {
   it("time filter drops records that started outside the window", () => {
     const state = emptyState()
     // one step started 500 minutes ago — outside Today's 435-minute window
-    // (issuing to an idle counter starts service automatically)
     issueToken(
       state,
       { name: "Old", serviceType: "Cash Deposit", counterId: 1 },
       NOW - 500 * MIN
     )
+    callNextCustomer(state, 1, NOW - 500 * MIN)
     completeCurrentService(state, 1, NOW - 490 * MIN)
     issueToken(
       state,
       { name: "Recent", serviceType: "Cash Deposit", counterId: 1 },
       NOW - 10 * MIN
     )
+    callNextCustomer(state, 1, NOW - 10 * MIN)
 
     const all = stepRecords(state, NOW)
     expect(all).toHaveLength(2)
@@ -230,10 +232,12 @@ describe("hold metrics in manager analytics", () => {
     const c = issueToken(
       state,
       { name: "Held", serviceType: "KYC Update", counterId: 1 },
-      NOW - 30 * MIN // idle counter → serving immediately
+      NOW - 30 * MIN
     )
+    callNextCustomer(state, 1, NOW - 30 * MIN) // explicit call
     holdCurrentCustomer(state, 1, "Document required", NOW - 25 * MIN)
-    releaseHold(state, c.id, NOW - 15 * MIN) // idle → resumes immediately
+    releaseHold(state, c.id, NOW - 15 * MIN)
+    callNextCustomer(state, 1, NOW - 15 * MIN) // employee resumes explicitly
     completeCurrentService(state, 1, NOW - 10 * MIN)
     return state
   }
@@ -255,8 +259,9 @@ describe("hold metrics in manager analytics", () => {
     issueToken(
       state,
       { name: "Now Held", serviceType: "Other", counterId: 2 },
-      NOW - 5 * MIN // serving immediately
+      NOW - 5 * MIN
     )
+    callNextCustomer(state, 2, NOW - 5 * MIN)
     holdCurrentCustomer(state, 2, "System issue", NOW - MIN)
     expect(managerKpis(state, NOW).tokensOnHold).toBe(1)
   })
@@ -282,8 +287,9 @@ describe("employee break metrics in manager analytics", () => {
     issueToken(
       state,
       { name: "Pausee", serviceType: "Cash Deposit", counterId: 1 },
-      NOW - 20 * MIN // serving immediately
+      NOW - 20 * MIN
     )
+    callNextCustomer(state, 1, NOW - 20 * MIN)
     startBreak(state, 1, NOW - 15 * MIN)
     endBreak(state, 1, NOW - 5 * MIN) // 10-minute break
     completeCurrentService(state, 1, NOW)

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  callNextCustomer,
   emptyState,
   endBreak,
+  getRecommendedCustomer,
   holdCurrentCustomer,
   issueToken,
   releaseHold,
@@ -88,21 +90,48 @@ describe("WhatsApp customer view (derived, pause-safe)", () => {
   })
 })
 
+describe("WhatsApp — recommendation ≠ assignment", () => {
+  it("a RECOMMENDED customer still shows Waiting until explicitly called", () => {
+    const state = emptyState()
+    const customer = issueToken(
+      state,
+      { name: "Waiting One", serviceType: "Cash Deposit", counterId: 1 },
+      NOW - 5 * MIN
+    )
+    expect(getRecommendedCustomer(state, 1)?.id).toBe(customer.id)
+
+    // recommended — but the status is WAITING, position #1, no turn message
+    const status = customerLiveStatus(state, customer.id)
+    expect(status.status).toBe("waiting")
+    expect(status.position).toBe(1)
+    const texts = buildWhatsAppMessages(customer).map((m) => m.text)
+    expect(texts.some((t) => t.includes("It's your turn"))).toBe(false)
+
+    // the explicit call flips the customer to serving + turn message
+    callNextCustomer(state, 1, NOW - MIN)
+    expect(customerLiveStatus(state, customer.id).status).toBe("serving")
+    const after = buildWhatsAppMessages(customer).map((m) => m.text)
+    expect(after.some((t) => t.includes("It's your turn"))).toBe(true)
+  })
+})
+
 describe("WhatsApp hold experience (driven by ACTUAL state, never faked)", () => {
   function heldScenario() {
     const state = emptyState()
     const customer = issueToken(
       state,
       { name: "Ravi Kumar", serviceType: "Account Opening", counterId: 1 },
-      NOW - 10 * MIN // idle counter → serving immediately
+      NOW - 10 * MIN
     )
+    callNextCustomer(state, 1, NOW - 10 * MIN) // explicit call
     holdCurrentCustomer(state, 1, "Document required", NOW - 5 * MIN)
-    // another customer is auto-assigned, so a release stays NEXT AFTER CURRENT
+    // another customer is called, so a release stays NEXT AFTER CURRENT
     issueToken(
       state,
       { name: "Keeps Busy", serviceType: "Cash Deposit", counterId: 1 },
       NOW - 4 * MIN
     )
+    callNextCustomer(state, 1, NOW - 4 * MIN)
     return { state, customer }
   }
 
@@ -152,8 +181,9 @@ describe("WhatsApp employee-break experience (customer-friendly, no staff intern
     const customer = issueToken(
       state,
       { name: "Lakshmi Rao", serviceType: "Cash Withdrawal", counterId: 2 },
-      NOW - 10 * MIN // serving immediately
+      NOW - 10 * MIN
     )
+    callNextCustomer(state, 2, NOW - 10 * MIN) // explicit call
     startBreak(state, 2, NOW - 5 * MIN)
     return { state, customer }
   }

@@ -42,8 +42,6 @@ export function emptyState(): QueueState {
       releasedQueue: [],
       heldIds: [],
       breaks: [],
-      nextOverrideId: null,
-      nextOverrideReason: null,
     })),
     activities: [],
     overrides: [],
@@ -144,14 +142,74 @@ export function waitingCount(counter: Counter): number {
   )
 }
 
-/** Begin (or resume) serving a specific customer at a counter. */
-function startService(
+/** all customers currently eligible to be called by this counter */
+export function eligibleCustomerIds(counter: Counter): string[] {
+  return [...counter.releasedQueue, ...counter.priorityQueue, ...counter.queue]
+}
+
+/**
+ * THE RECOMMENDATION ENGINE — a pure, read-only peek at journey-aware FIFO:
+ *
+ *   1. NEXT AFTER CURRENT (released holds, in release order)
+ *   2. JOURNEY IN PROGRESS (started journeys, in arrival order)
+ *   3. NEW REQUESTS       (normal FIFO)
+ *
+ * RECOMMENDATION ≠ ASSIGNMENT. This function never mutates state, never
+ * assigns, never moves anyone into NOW SERVING. A customer starts service
+ * ONLY through an explicit employee callCustomer().
+ */
+export function getRecommendedCustomer(
   state: QueueState,
-  counter: Counter,
-  customer: Customer,
+  counterId: number
+): Customer | null {
+  const counter = getCounter(state, counterId)
+  const nextId =
+    counter.releasedQueue[0] ?? counter.priorityQueue[0] ?? counter.queue[0]
+  return nextId ? getCustomer(state, nextId) : null
+}
+
+/**
+ * THE single way a waiting customer becomes NOW SERVING — an explicit
+ * employee call (the automated demo invokes this same operation, acting as
+ * the employee). Validates employee/counter availability and token
+ * eligibility, moves the customer atomically out of their tier, and — when
+ * the chosen customer is NOT the system recommendation — records a queue
+ * override in the audit history. Everyone else keeps their exact position:
+ * an override never reorders the queue.
+ */
+export function callCustomer(
+  state: QueueState,
+  counterId: number,
+  customerId: string,
   now: number,
-  via: "auto" | "manual"
-): void {
+  reason: OverrideReason | null = null
+): Customer {
+  const counter = getCounter(state, counterId)
+  if (counter.status === "on-break") {
+    throw new Error(
+      `${counterLabel(counterId)} — the employee is on a break and must resume work first`
+    )
+  }
+  if (counter.currentCustomerId) {
+    throw new Error(`${counterLabel(counterId)} is already serving a customer`)
+  }
+  const customer = getCustomer(state, customerId)
+  const pools = [counter.releasedQueue, counter.priorityQueue, counter.queue]
+  const pool = pools.find((p) => p.includes(customerId))
+  if (!pool) {
+    // held, already serving somewhere, completed or waiting at another counter
+    throw new Error(
+      `${customer.token} is not eligible to be called at ${counterLabel(counterId)}`
+    )
+  }
+
+  const recommended = getRecommendedCustomer(state, counterId)!
+  const positionBefore = queuePosition(state, customerId) ?? 1
+  const isOverride = recommended.id !== customer.id
+
+  // atomic: exactly one tier loses exactly this customer
+  pool.splice(pool.indexOf(customerId), 1)
+
   counter.currentCustomerId = customer.id
   counter.status = "serving"
   customer.status = "serving"
@@ -169,155 +227,51 @@ function startService(
   }
   step.status = "serving"
 
-  pushActivity(
-    state,
-    "called",
-    customer.id,
-    resumedHold
-      ? `${customer.token} resumed at ${counterLabel(counter.id)} — released hold served first`
-      : via === "auto"
-        ? `${customer.token} automatically assigned at ${counterLabel(counter.id)}`
-        : `${customer.token} called at ${counterLabel(counter.id)}`,
-    now
-  )
-}
-
-/**
- * THE RECOMMENDED next customer — a pure peek at the journey-aware FIFO
- * order, never mutating anything. Queue Override does NOT change what this
- * returns; it only lets the employee serve someone else instead, once.
- */
-export function getNextEligibleCustomer(
-  state: QueueState,
-  counterId: number
-): Customer | null {
-  const counter = getCounter(state, counterId)
-  const nextId =
-    counter.releasedQueue[0] ?? counter.priorityQueue[0] ?? counter.queue[0]
-  return nextId ? getCustomer(state, nextId) : null
-}
-
-/** all customers currently eligible to be served by this counter */
-export function eligibleCustomerIds(counter: Counter): string[] {
-  return [...counter.releasedQueue, ...counter.priorityQueue, ...counter.queue]
-}
-
-/**
- * THE single queue-engine selection rule (journey-aware FIFO). Whenever a
- * counter is free and its employee is available, serve — in order:
- *
- *   1. NEXT AFTER CURRENT (released holds, in release order)
- *   2. JOURNEY IN PROGRESS (started journeys, in arrival order)
- *   3. NEW REQUESTS       (normal FIFO)
- *
- * A pending QUEUE OVERRIDE (an employee's explicit "serve this one next")
- * is honored exactly once, audited, and consumed — the tiers themselves are
- * never reordered, so automation resumes untouched afterwards. Held
- * customers are never selected. Returns the customer now being served, or
- * null when the counter stays idle (or is busy / on break).
- */
-export function assignNextEligibleCustomer(
-  state: QueueState,
-  counterId: number,
-  now: number,
-  via: "auto" | "manual" = "auto"
-): Customer | null {
-  const counter = getCounter(state, counterId)
-  if (counter.status === "on-break") return null
-  if (counter.currentCustomerId) return null
-
-  // pending human override — applied once, then automation resumes
-  if (counter.nextOverrideId) {
-    const overrideId = counter.nextOverrideId
-    const reason = counter.nextOverrideReason as OverrideReason | null
-    counter.nextOverrideId = null
-    counter.nextOverrideReason = null
-
-    const pools = [counter.releasedQueue, counter.priorityQueue, counter.queue]
-    const pool = pools.find((p) => p.includes(overrideId))
-    if (pool) {
-      const recommended = getNextEligibleCustomer(state, counterId)!
-      const selected = getCustomer(state, overrideId)
-      if (recommended.id !== selected.id) {
-        // serve the chosen customer WITHOUT touching anyone else's position
-        pool.splice(pool.indexOf(overrideId), 1)
-        startService(state, counter, selected, now, via)
-        state.overrides.push({
-          id: uid("ovr"),
-          at: now,
-          counterId: counter.id,
-          employeeName: counter.employeeName,
-          recommendedToken: recommended.token,
-          recommendedName: recommended.name,
-          selectedToken: selected.token,
-          selectedName: selected.name,
-          reason,
-        })
-        pushActivity(
-          state,
-          "queue-override",
-          selected.id,
-          `${counter.employeeName} at ${counterLabel(counter.id)} manually selected ${selected.token} instead of recommended ${recommended.token} — queue override${reason ? ` (${reason})` : ""}`,
-          now
-        )
-        return selected
-      }
-      // the chosen customer IS the recommendation — normal assignment below
-    }
-    // stale override (customer left this counter) — discarded silently
+  if (isOverride) {
+    state.overrides.push({
+      id: uid("ovr"),
+      at: now,
+      counterId: counter.id,
+      employeeName: counter.employeeName,
+      recommendedToken: recommended.token,
+      recommendedName: recommended.name,
+      selectedToken: customer.token,
+      selectedName: customer.name,
+      reason,
+    })
+    pushActivity(
+      state,
+      "queue-override",
+      customer.id,
+      `${counter.employeeName} at ${counterLabel(counter.id)} called ${customer.token} (was #${positionBefore}) instead of recommended ${recommended.token} — queue override${reason ? ` (${reason})` : ""}`,
+      now
+    )
+  } else {
+    pushActivity(
+      state,
+      "called",
+      customer.id,
+      resumedHold
+        ? `${customer.token} called at ${counterLabel(counter.id)} — released hold, service resumes`
+        : `${customer.token} called at ${counterLabel(counter.id)} by ${counter.employeeName} (was #${positionBefore} in line)`,
+      now
+    )
   }
-
-  const nextId =
-    counter.releasedQueue.shift() ??
-    counter.priorityQueue.shift() ??
-    counter.queue.shift()
-  if (!nextId) {
-    counter.status = "available"
-    return null
-  }
-
-  const customer = getCustomer(state, nextId)
-  startService(state, counter, customer, now, via)
   return customer
 }
 
 /**
- * QUEUE OVERRIDE — the employee chooses a different eligible customer to be
- * served next instead of the system recommendation. Passing null (or the
- * recommended customer) reverts to pure automation. On a free counter the
- * choice takes effect immediately; while serving, it is applied when the
- * counter next becomes available. Never reorders the queue tiers.
+ * Convenience: explicitly call the RECOMMENDED customer (the "✓ Call T-xx"
+ * button). Returns null when nobody is waiting.
  */
-export function setNextOverride(
+export function callNextCustomer(
   state: QueueState,
   counterId: number,
-  customerId: string | null,
-  now: number,
-  reason: OverrideReason | null = null
+  now: number
 ): Customer | null {
-  const counter = getCounter(state, counterId)
-  if (counter.status === "on-break") {
-    throw new Error(
-      `${counterLabel(counterId)} — resume work before choosing a customer`
-    )
-  }
-  if (customerId === null) {
-    counter.nextOverrideId = null
-    counter.nextOverrideReason = null
-    return null
-  }
-  const customer = getCustomer(state, customerId)
-  if (!eligibleCustomerIds(counter).includes(customerId)) {
-    // held, serving elsewhere, completed or waiting at another counter
-    throw new Error(
-      `${customer.token} is not eligible to be served at ${counterLabel(counterId)}`
-    )
-  }
-  counter.nextOverrideId = customerId
-  counter.nextOverrideReason = reason
-  // a free counter applies the employee's choice right away
-  assignNextEligibleCustomer(state, counterId, now)
-  return customer
+  const recommended = getRecommendedCustomer(state, counterId)
+  if (!recommended) return null
+  return callCustomer(state, counterId, recommended.id, now)
 }
 
 export interface IssueTokenInput {
@@ -329,9 +283,8 @@ export interface IssueTokenInput {
 
 /**
  * Rules 1 & 2 — unique token, appended to the END of the NEW REQUESTS queue
- * (a fresh token has never started a journey). If the counter is free and the
- * employee is available, the customer is assigned automatically — no manual
- * Call Next required.
+ * (a fresh token has never started a journey). The customer WAITS — even at
+ * a free counter — until the employee explicitly calls them.
  */
 export function issueToken(
   state: QueueState,
@@ -375,36 +328,15 @@ export function issueToken(
     `${token} issued to ${customer.name} — joined ${counterLabel(counter.id)} at position #${queuePosition(state, customer.id)}`,
     now
   )
-  // idle counter + available employee → serve immediately
-  assignNextEligibleCustomer(state, counter.id, now)
   return customer
 }
 
 /**
- * Manual fallback (Rule 9 still holds — only the FIRST eligible customer can
- * be called). Normal flow assigns automatically; this remains for exceptional
- * scenarios. Blocked while serving or on break.
- */
-export function callNextCustomer(
-  state: QueueState,
-  counterId: number,
-  now: number
-): Customer | null {
-  const counter = getCounter(state, counterId)
-  if (counter.status === "on-break") {
-    throw new Error(`${counterLabel(counterId)} — employee is on break`)
-  }
-  if (counter.currentCustomerId) {
-    throw new Error(`${counterLabel(counterId)} is already serving a customer`)
-  }
-  return assignNextEligibleCustomer(state, counterId, now, "manual")
-}
-
-/**
  * HOLD — only the customer CURRENTLY BEING SERVED can be put on hold. The
- * token, journey and employee/counter relationship are preserved; the customer
- * leaves active service and FIFO selection entirely, and the next eligible
- * customer is assigned automatically.
+ * token, journey and employee/counter relationship are preserved; the
+ * customer leaves active service and FIFO selection entirely. The counter
+ * becomes AVAILABLE with a fresh recommendation — nobody is auto-assigned;
+ * the employee explicitly calls the next customer.
  */
 export function holdCurrentCustomer(
   state: QueueState,
@@ -437,16 +369,15 @@ export function holdCurrentCustomer(
     `${customer.token} put on hold at ${counterLabel(counterId)} — ${reason}`,
     now
   )
-  // the counter is free again → next eligible customer starts automatically
-  assignNextEligibleCustomer(state, counterId, now)
   return customer
 }
 
 /**
- * RELEASE HOLD — the customer becomes NEXT AFTER CURRENT: first in line after
- * the currently served customer finishes, ahead of the journey-in-progress
- * and normal queues. Multiple releases keep their release order. Never
- * interrupts the customer currently being served.
+ * RELEASE HOLD — the customer becomes NEXT AFTER CURRENT: the top
+ * recommendation once the currently served customer finishes, ahead of the
+ * journey-in-progress and normal queues. Multiple releases keep their
+ * release order. Never interrupts anyone and never auto-assigns — the
+ * employee explicitly calls the released customer.
  */
 export function releaseHold(
   state: QueueState,
@@ -476,8 +407,6 @@ export function releaseHold(
     `${customer.token} hold released at ${counterLabel(counter.id)} — next after current`,
     now
   )
-  // if nobody is being served, the released customer resumes immediately
-  assignNextEligibleCustomer(state, counter.id, now)
   return customer
 }
 
@@ -489,8 +418,10 @@ function finishCurrentStep(customer: Customer, now: number): void {
 
 /**
  * Rules 6 & 5 — completing service at a counter ends the whole journey ONLY
- * when the employee explicitly completes it (vs. transferring). The next
- * eligible customer is then assigned automatically.
+ * when the employee explicitly completes it (vs. transferring). The counter
+ * becomes AVAILABLE and the engine shows the next RECOMMENDATION — no
+ * customer is auto-assigned; a "Now Serving" only happens on an explicit
+ * call (the customer must never be notified before the employee decides).
  */
 export function completeCurrentService(
   state: QueueState,
@@ -522,8 +453,6 @@ export function completeCurrentService(
     `${customer.token} journey completed at ${counterLabel(counterId)}`,
     now
   )
-  // service finished → the next eligible customer starts automatically
-  assignNextEligibleCustomer(state, counterId, now)
   return customer
 }
 
@@ -533,19 +462,19 @@ export interface TransferResult {
   toCounterId: number
   /** which tier the customer landed in at the destination */
   tier: WaitingTier
-  /** 1-based position in the destination's effective line (0 = now serving) */
+  /** 1-based position in the destination's effective line */
   position: number
-  /** true when the destination was idle and service began immediately */
-  assignedImmediately: boolean
+  /** true when the customer is now the destination's top recommendation */
+  recommendedNext: boolean
 }
 
 /**
  * Rule 4 — transfer preserves the token and full journey history. Placement
- * is journey-aware: a customer whose journey has already started joins the
- * destination's JOURNEY IN PROGRESS queue (ahead of new requests, FIFO by
- * arrival); a never-started customer joins the normal NEW REQUESTS queue.
- * An idle destination serves the customer immediately; the freed origin
- * counter automatically assigns its own next eligible customer.
+ * is journey-aware: a started journey joins the destination's JOURNEY IN
+ * PROGRESS queue (ahead of new requests, FIFO by arrival); a never-started
+ * customer joins the normal NEW REQUESTS queue. NOBODY is auto-assigned —
+ * even at an idle destination the customer becomes the RECOMMENDATION and
+ * waits for the employee's explicit call.
  */
 export function transferCustomer(
   state: QueueState,
@@ -596,11 +525,6 @@ export function transferCustomer(
     step.completedAt = now
     step.status = "completed"
   }
-  // a pending override pointing at the departing customer becomes stale
-  if (from.nextOverrideId === customer.id) {
-    from.nextOverrideId = null
-    from.nextOverrideReason = null
-  }
 
   // journey-aware placement — started journeys outrank new requests,
   // strictly FIFO within each tier (arrival order at THIS counter)
@@ -626,7 +550,7 @@ export function transferCustomer(
   if (started) to.priorityQueue.push(customer.id)
   else to.queue.push(customer.id)
 
-  const position = queuePosition(state, customer.id) ?? 0
+  const position = queuePosition(state, customer.id) ?? 1
   pushActivity(
     state,
     "transferred",
@@ -637,26 +561,20 @@ export function transferCustomer(
     now
   )
 
-  // the freed origin serves its next eligible customer …
-  assignNextEligibleCustomer(state, fromCounterId, now)
-  // … and an idle destination serves the transferred customer immediately
-  const assigned = assignNextEligibleCustomer(state, toCounterId, now)
-  const assignedImmediately = assigned?.id === customer.id
-
   return {
     customer,
     fromCounterId,
     toCounterId,
     tier,
-    position: assignedImmediately ? 0 : position,
-    assignedImmediately,
+    position,
+    recommendedNext: getRecommendedCustomer(state, toCounterId)?.id === customer.id,
   }
 }
 
 /**
  * EMPLOYEE BREAK — the employee becomes unavailable WITHOUT losing the
  * current customer's place. An in-progress service is paused (never held,
- * never re-queued); no other customer is assigned until the employee returns.
+ * never re-queued); no customer can be called until the employee returns.
  */
 export function startBreak(
   state: QueueState,
@@ -693,8 +611,8 @@ export function startBreak(
 /**
  * RESUME AFTER BREAK — if a customer's service was paused, exactly that
  * customer resumes (same timer, same priority, no new queue entry).
- * Otherwise the counter is free again and the next eligible customer is
- * assigned automatically.
+ * Otherwise the counter is simply AVAILABLE again with a recommendation —
+ * the employee explicitly calls the next customer; nothing is auto-assigned.
  */
 export function endBreak(
   state: QueueState,
@@ -734,7 +652,6 @@ export function endBreak(
       `${counter.employeeName} returned at ${counterLabel(counterId)}`,
       now
     )
-    assignNextEligibleCustomer(state, counterId, now)
   }
   return counter
 }

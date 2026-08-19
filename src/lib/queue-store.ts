@@ -4,15 +4,16 @@ import { create } from "zustand"
 
 import { notifyTransient } from "./notifications"
 import {
+  callCustomer,
   callNextCustomer,
   completeCurrentService,
+  getRecommendedCustomer,
   COUNTER_DEFS,
   emptyState,
   endBreak,
   holdCurrentCustomer,
   issueToken,
   releaseHold,
-  setNextOverride,
   startBreak,
   transferCustomer,
   type IssueTokenInput,
@@ -27,8 +28,8 @@ import type {
   QueueState,
 } from "./types"
 
-// v4 — queue-override fields and audit history
-const STORAGE_KEY = "smart-bank-queue-v4"
+// v5 — manual calling (recommendation ≠ assignment), no auto-assign fields
+const STORAGE_KEY = "smart-bank-queue-v5"
 
 export type DemoStatus = "idle" | "playing" | "paused"
 export type DemoSpeed = 0.5 | 1 | 2 | 4
@@ -52,12 +53,12 @@ interface QueueStore {
   release: (customerId: string) => Customer
   beginBreak: (counterId: number) => Counter
   finishBreak: (counterId: number) => Counter
-  armOverride: (
+  /** explicit employee call — the ONLY way a customer becomes NOW SERVING */
+  call: (
     counterId: number,
     customerId: string,
     reason?: OverrideReason | null
-  ) => Customer | null
-  clearOverride: (counterId: number) => void
+  ) => Customer
   resetDemo: () => void
   clearAll: () => void
   playDemo: () => void
@@ -84,8 +85,7 @@ function loadFromStorage(): QueueState | null {
           Array.isArray(c.priorityQueue) &&
           Array.isArray(c.releasedQueue) &&
           Array.isArray(c.heldIds) &&
-          Array.isArray(c.breaks) &&
-          "nextOverrideId" in c
+          Array.isArray(c.breaks)
       ) ||
       !Array.isArray(parsed.state.overrides)
     ) {
@@ -121,18 +121,23 @@ function byToken(state: QueueState, token: string): Customer {
 const DEMO_TOKEN = "T-115" // first token issued after the seeded scenario
 
 /**
- * Live Demo — walks through the journey-aware queue engine end to end:
- *   A  completion auto-assigns the next eligible customer (no Call Next)
- *   B  a journey-started transfer enters the PRIORITY queue ahead of new ones
- *   C  putting a customer on hold auto-assigns the next eligible customer
- *   D  releasing a hold creates NEXT AFTER CURRENT, served on completion
- *   E  an employee break pauses the current service, counter ON BREAK
- *   F  returning from break resumes the SAME customer (same timer)
- *   G  completing after the break auto-assigns the next eligible customer
+ * Live Demo — RECOMMENDATION ≠ ASSIGNMENT. Every "Now Serving" transition
+ * happens through the same explicit callCustomer business action a real
+ * employee uses; the scripted demo merely acts as the employee. The step
+ * delay between "recommended" and "call" is governed by the demo speed
+ * control, making the two-phase model visible:
+ *
+ *   recommendation → brief pause → employee CALL → Now Serving
  */
+/** call the recommended customer at a counter (the demo acts as the employee) */
+function callRecommended(s: QueueStore, counterId: number): void {
+  const recommended = getRecommendedCustomer(s.state, counterId)
+  if (recommended) s.call(counterId, recommended.id)
+}
+
 const DEMO_STEPS: DemoStep[] = [
   {
-    note: `A new customer walks in — token ${DEMO_TOKEN}. Aisha joins Counter 1's NEW REQUESTS queue (her journey hasn't started).`,
+    note: `A new customer walks in — token ${DEMO_TOKEN}. Aisha joins Counter 1's NEW REQUESTS queue and WAITS (nobody is served without an explicit call).`,
     run: (s) =>
       void s.issue({
         name: "Aisha Khan",
@@ -142,47 +147,75 @@ const DEMO_STEPS: DemoStep[] = [
       }),
   },
   {
-    note: "SCENARIO A — Counter 1 completes T-106. The next eligible customer (T-114) is assigned AUTOMATICALLY — no Call Next needed.",
+    note: "Counter 1 completes T-106. The system RECOMMENDS T-114 — but nobody is assigned. The customer stays WAITING until Priya decides.",
     run: (s) => void s.completeService(1),
   },
   {
-    note: `Counter 1 completes T-114 — ${DEMO_TOKEN} is automatically assigned next.`,
+    note: "Priya agrees with the recommendation and explicitly CALLS T-114 — only now does the customer become NOW SERVING.",
+    run: (s) => callRecommended(s, 1),
+  },
+  {
+    note: `Counter 1 completes T-114 — the engine recommends ${DEMO_TOKEN}. Recommendation ≠ assignment.`,
     run: (s) => void s.completeService(1),
   },
   {
-    note: `SCENARIO B — ${DEMO_TOKEN}'s journey has STARTED, so transferring her to busy Counter 4 places her in JOURNEY IN PROGRESS — ahead of new request T-109.`,
+    note: `Priya CALLS ${DEMO_TOKEN} — Aisha's journey starts on the employee's decision, not the system's.`,
+    run: (s) => callRecommended(s, 1),
+  },
+  {
+    note: `${DEMO_TOKEN}'s journey has STARTED, so transferring her to busy Counter 4 places her in JOURNEY IN PROGRESS — ahead of new request T-109.`,
     run: (s) => void s.transfer(byToken(s.state, DEMO_TOKEN).id, 4),
   },
   {
-    note: `Counter 4 completes T-107 — ${DEMO_TOKEN} (journey in progress) is auto-assigned BEFORE T-109, who arrived earlier but never started.`,
+    note: `Counter 4 completes T-107 — the system recommends ${DEMO_TOKEN} (journey priority beats earlier-arrived T-109). Deepa hasn't called anyone yet.`,
     run: (s) => void s.completeService(4),
   },
   {
-    note: `${DEMO_TOKEN} moves on to Counter 3 — journey priority again. Freed Counter 4 automatically pulls T-109 in.`,
+    note: `Deepa CALLS ${DEMO_TOKEN} — the recommendation is honored by an explicit human action.`,
+    run: (s) => callRecommended(s, 4),
+  },
+  {
+    note: `${DEMO_TOKEN} moves on to busy Counter 3 — journey priority again. Freed Counter 4 now RECOMMENDS T-109.`,
     run: (s) => void s.transfer(byToken(s.state, DEMO_TOKEN).id, 3),
   },
   {
-    note: "SCENARIO C — Ravi's (T-104) document is missing: Counter 3 puts him ON HOLD. The next eligible customer (Aisha) starts AUTOMATICALLY.",
+    note: "Deepa CALLS T-109 at Counter 4.",
+    run: (s) => callRecommended(s, 4),
+  },
+  {
+    note: "HOLD — Ravi's (T-104) document is missing: Counter 3 puts him ON HOLD. The counter is AVAILABLE and recommends Aisha — nobody is auto-assigned.",
     run: (s) => void s.holdCurrent(3, "Document required"),
   },
   {
-    note: "SCENARIO D — Ravi's document arrives: the hold is RELEASED. T-104 becomes NEXT AFTER CURRENT — ahead of every queue, without interrupting Aisha.",
+    note: `Kavita CALLS ${DEMO_TOKEN} — the held ticket is skipped, the recommendation was explicitly accepted.`,
+    run: (s) => callRecommended(s, 3),
+  },
+  {
+    note: "Ravi's document arrives: the hold is RELEASED. T-104 becomes NEXT AFTER CURRENT — top recommendation once Aisha finishes, interrupting nobody.",
     run: (s) => void s.release(byToken(s.state, "T-104").id),
   },
   {
-    note: `Counter 3 completes ${DEMO_TOKEN}'s 3-stop journey — released hold T-104 is served next, before the waiting queue.`,
+    note: `Counter 3 completes ${DEMO_TOKEN}'s 3-stop journey — the system recommends released-hold T-104. Still nobody auto-assigned.`,
     run: (s) => void s.completeService(3),
   },
   {
-    note: "Ravi transfers to IDLE Counter 1 — no artificial wait, he is serving immediately. Counter 3 auto-assigns T-110.",
+    note: "Kavita CALLS T-104 — the released hold resumes first, by explicit decision.",
+    run: (s) => callRecommended(s, 3),
+  },
+  {
+    note: "Ravi transfers to IDLE Counter 1 — he becomes the RECOMMENDATION there, NOT Now Serving. No customer is notified before the employee calls.",
     run: (s) => void s.transfer(byToken(s.state, "T-104").id, 1),
   },
   {
-    note: "SCENARIO E — Priya starts a ☕ break while serving Ravi. His service PAUSES (keeping his place); Counter 1 is ON BREAK.",
+    note: "Priya CALLS T-104 — his 4th stop begins on her explicit action.",
+    run: (s) => callRecommended(s, 1),
+  },
+  {
+    note: "EMPLOYEE BREAK — Priya starts a ☕ break while serving Ravi. His service PAUSES (keeping his place); Counter 1 is ON BREAK.",
     run: (s) => void s.beginBreak(1),
   },
   {
-    note: "T-116 arrives at Counter 1 — he WAITS. No customer is auto-assigned while the employee is on break.",
+    note: "T-116 arrives at Counter 1 — he WAITS. Nobody can be called while the employee is on break.",
     run: (s) =>
       void s.issue({
         name: "Vikram Singh",
@@ -191,46 +224,62 @@ const DEMO_STEPS: DemoStep[] = [
       }),
   },
   {
-    note: "SCENARIO F — Priya returns. Ravi's service RESUMES exactly where it paused — same timer, same priority, not Vikram.",
+    note: "Priya returns and explicitly RESUMES Ravi — same timer, same priority, not Vikram.",
     run: (s) => void s.finishBreak(1),
   },
   {
-    note: "SCENARIO G — T-104 completes: 4 stops, one hold, one break — fully traceable. T-116 is auto-assigned next.",
+    note: "T-104 completes: 4 stops, one hold, one break — fully traceable. Counter 1 recommends T-116; Priya will call when ready.",
     run: (s) => void s.completeService(1),
   },
-  // --- QUEUE OVERRIDE: automation → human judgment → automation resumes ---
+  // --- QUEUE OVERRIDE: recommendation → human judgment → recommendation ---
   {
-    note: "QUEUE OVERRIDE — Counter 2's next recommended is T-111, but T-113 is ready first. Arjun chooses T-113 to be served next (human judgment, fully audited).",
+    note: "Counter 2 completes T-108. The system recommends T-111 — but Arjun sees that T-113 is ready first.",
+    run: (s) => void s.completeService(2),
+  },
+  {
+    note: "QUEUE OVERRIDE — Arjun CALLS T-113 instead of recommended T-111 (reason: customer ready). Audited; T-111 keeps his exact position.",
     run: (s) =>
-      void s.armOverride(2, byToken(s.state, "T-113").id, "Customer ready"),
+      void s.call(2, byToken(s.state, "T-113").id, "Customer ready"),
   },
   {
-    note: "Counter 2 completes T-108 — the OVERRIDE serves T-113 instead of recommended T-111. T-111 keeps his exact queue position.",
+    note: "T-113 completes — the engine again recommends T-111, whose priority the override never touched.",
     run: (s) => void s.completeService(2),
   },
   {
-    note: "T-113 completes — AUTOMATION RESUMES: the engine again recommends T-111, whose priority was never touched by the override.",
-    run: (s) => void s.completeService(2),
+    note: "Arjun CALLS T-111 — back to following the recommendation.",
+    run: (s) => callRecommended(s, 2),
   },
   {
-    note: "Counter 4 completes T-109 — queue empty, counter idles.",
+    note: "Kavita CALLS T-110 at Counter 3.",
+    run: (s) => callRecommended(s, 3),
+  },
+  {
+    note: "Priya CALLS T-116 at Counter 1.",
+    run: (s) => callRecommended(s, 1),
+  },
+  {
+    note: "Counter 4 completes T-109 — no customers waiting, counter simply stays AVAILABLE.",
     run: (s) => void s.completeService(4),
   },
   {
-    note: "Counter 3 completes T-110 — T-112 auto-assigned.",
+    note: "Counter 3 completes T-110 — T-112 is recommended, not assigned.",
     run: (s) => void s.completeService(3),
   },
   {
-    note: "Counter 1 completes T-116 — the branch keeps flowing without a single manual Call Next.",
+    note: "Kavita CALLS T-112.",
+    run: (s) => callRecommended(s, 3),
+  },
+  {
+    note: "Counter 1 completes T-116.",
     run: (s) => void s.completeService(1),
   },
   {
-    note: "Counter 3 completes T-112 — journey-aware FIFO, automatic assignment, holds, breaks and overrides all demonstrated.",
-    run: (s) => void s.completeService(3),
+    note: "Counter 2 completes T-111.",
+    run: (s) => void s.completeService(2),
   },
   {
-    note: "Counter 2 completes T-111 — automation first, human override when needed, no queue corruption, full traceability.",
-    run: (s) => void s.completeService(2),
+    note: "Counter 3 completes T-112 — every single service started with an explicit employee call. Recommendation ≠ assignment, end to end.",
+    run: (s) => void s.completeService(3),
   },
 ]
 
@@ -386,14 +435,9 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     finishBreak: (counterId) =>
       mutate((draft) => endBreak(draft, counterId, Date.now())),
 
-    armOverride: (counterId, customerId, reason = null) =>
+    call: (counterId, customerId, reason = null) =>
       mutate((draft) =>
-        setNextOverride(draft, counterId, customerId, Date.now(), reason)
-      ),
-
-    clearOverride: (counterId) =>
-      void mutate((draft) =>
-        setNextOverride(draft, counterId, null, Date.now())
+        callCustomer(draft, counterId, customerId, Date.now(), reason)
       ),
 
     resetDemo: () => {
