@@ -3,6 +3,7 @@
 import { useState } from "react"
 import {
   Activity,
+  ArrowUpDown,
   ChartBar,
   Clock,
   FilterX,
@@ -338,6 +339,16 @@ export function ManagerDashboard({
           : "vs Estimated Capacity",
       icon: Gauge,
     },
+    {
+      id: "overrides",
+      label: "Queue Overrides",
+      value: String(kpis.overrides),
+      sub:
+        kpis.overrides > 0
+          ? `${Math.round(kpis.overrideRate * 1000) / 10}% of assignments`
+          : "automation only",
+      icon: ArrowUpDown,
+    },
   ]
 
   return (
@@ -488,7 +499,7 @@ export function ManagerDashboard({
       </div>
 
       {/* KPI row — click any KPI to see the records behind the number */}
-      <div className="grid shrink-0 grid-cols-6 divide-x rounded-xl border bg-card shadow-xs">
+      <div className="grid shrink-0 grid-cols-7 divide-x rounded-xl border bg-card shadow-xs">
         {tiles.map((tile) => (
           <button
             key={tile.id}

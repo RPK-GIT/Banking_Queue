@@ -240,6 +240,45 @@ describe("demo engine — pause freezes the simulation, not the app", () => {
     expect(store().demoStatus).toBe("idle")
   })
 
+  it("demonstrates QUEUE OVERRIDE: automation → human judgment → automation resumes", () => {
+    store().setDemoSpeed(1)
+    store().playDemo()
+
+    const byToken = (token: string) =>
+      Object.values(store().state.customers).find((c) => c.token === token)
+    const counter2 = () => store().state.counters[1]
+    const step = (n: number) => {
+      while (store().demoStepIndex < n) vi.advanceTimersByTime(STEP_DELAY)
+    }
+
+    // step 15 arms the override at Counter 2 (recommended T-111, chosen T-113)
+    step(15)
+    expect(counter2().nextOverrideId).toBe(byToken("T-113")!.id)
+    expect(counter2().queue).toEqual([byToken("T-111")!.id, byToken("T-113")!.id])
+
+    // step 16: completion applies the override — T-113 served, T-111 untouched
+    step(16)
+    expect(counter2().currentCustomerId).toBe(byToken("T-113")!.id)
+    expect(counter2().queue).toEqual([byToken("T-111")!.id]) // position kept
+    expect(store().state.overrides).toHaveLength(1)
+    expect(store().state.overrides[0]).toMatchObject({
+      counterId: 2,
+      employeeName: "Arjun",
+      recommendedToken: "T-111",
+      selectedToken: "T-113",
+      reason: "Customer ready",
+    })
+
+    // step 17: automation resumes — the original recommendation is served
+    step(17)
+    expect(counter2().currentCustomerId).toBe(byToken("T-111")!.id)
+
+    step(DEMO_STEP_COUNT)
+    expect(store().demoStatus).toBe("idle")
+    expect(byToken("T-111")?.status).toBe("completed")
+    expect(store().state.overrides).toHaveLength(1) // exactly one, never repeated
+  })
+
   it("pause prevents any new notifications from being generated", async () => {
     const { toast } = await import("sonner")
     store().playDemo()

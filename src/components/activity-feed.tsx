@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from "motion/react"
 import {
   ArrowRightLeft,
+  ArrowUpDown,
   BellRing,
   CheckCircle2,
   CircleCheck,
@@ -42,6 +43,10 @@ const ICONS: Record<ActivityType, { icon: LucideIcon; className: string }> = {
   },
   "break-started": { icon: Coffee, className: "bg-rose-100 text-rose-700" },
   "break-ended": { icon: Coffee, className: "bg-emerald-100 text-emerald-700" },
+  "queue-override": {
+    icon: ArrowUpDown,
+    className: "bg-violet-100 text-violet-700",
+  },
   reset: { icon: Radio, className: "bg-muted text-muted-foreground" },
 }
 

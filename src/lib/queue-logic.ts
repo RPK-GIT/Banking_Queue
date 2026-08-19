@@ -3,6 +3,7 @@ import type {
   Counter,
   Customer,
   HoldReason,
+  OverrideReason,
   QueueState,
   ServiceType,
 } from "./types"
@@ -41,8 +42,11 @@ export function emptyState(): QueueState {
       releasedQueue: [],
       heldIds: [],
       breaks: [],
+      nextOverrideId: null,
+      nextOverrideReason: null,
     })),
     activities: [],
+    overrides: [],
     nextTokenNumber: 101,
   }
 }
@@ -179,6 +183,26 @@ function startService(
 }
 
 /**
+ * THE RECOMMENDED next customer — a pure peek at the journey-aware FIFO
+ * order, never mutating anything. Queue Override does NOT change what this
+ * returns; it only lets the employee serve someone else instead, once.
+ */
+export function getNextEligibleCustomer(
+  state: QueueState,
+  counterId: number
+): Customer | null {
+  const counter = getCounter(state, counterId)
+  const nextId =
+    counter.releasedQueue[0] ?? counter.priorityQueue[0] ?? counter.queue[0]
+  return nextId ? getCustomer(state, nextId) : null
+}
+
+/** all customers currently eligible to be served by this counter */
+export function eligibleCustomerIds(counter: Counter): string[] {
+  return [...counter.releasedQueue, ...counter.priorityQueue, ...counter.queue]
+}
+
+/**
  * THE single queue-engine selection rule (journey-aware FIFO). Whenever a
  * counter is free and its employee is available, serve — in order:
  *
@@ -186,8 +210,11 @@ function startService(
  *   2. JOURNEY IN PROGRESS (started journeys, in arrival order)
  *   3. NEW REQUESTS       (normal FIFO)
  *
- * Held customers are never selected. Returns the customer now being served,
- * or null when the counter stays idle (or is busy / on break).
+ * A pending QUEUE OVERRIDE (an employee's explicit "serve this one next")
+ * is honored exactly once, audited, and consumed — the tiers themselves are
+ * never reordered, so automation resumes untouched afterwards. Held
+ * customers are never selected. Returns the customer now being served, or
+ * null when the counter stays idle (or is busy / on break).
  */
 export function assignNextEligibleCustomer(
   state: QueueState,
@@ -198,6 +225,47 @@ export function assignNextEligibleCustomer(
   const counter = getCounter(state, counterId)
   if (counter.status === "on-break") return null
   if (counter.currentCustomerId) return null
+
+  // pending human override — applied once, then automation resumes
+  if (counter.nextOverrideId) {
+    const overrideId = counter.nextOverrideId
+    const reason = counter.nextOverrideReason as OverrideReason | null
+    counter.nextOverrideId = null
+    counter.nextOverrideReason = null
+
+    const pools = [counter.releasedQueue, counter.priorityQueue, counter.queue]
+    const pool = pools.find((p) => p.includes(overrideId))
+    if (pool) {
+      const recommended = getNextEligibleCustomer(state, counterId)!
+      const selected = getCustomer(state, overrideId)
+      if (recommended.id !== selected.id) {
+        // serve the chosen customer WITHOUT touching anyone else's position
+        pool.splice(pool.indexOf(overrideId), 1)
+        startService(state, counter, selected, now, via)
+        state.overrides.push({
+          id: uid("ovr"),
+          at: now,
+          counterId: counter.id,
+          employeeName: counter.employeeName,
+          recommendedToken: recommended.token,
+          recommendedName: recommended.name,
+          selectedToken: selected.token,
+          selectedName: selected.name,
+          reason,
+        })
+        pushActivity(
+          state,
+          "queue-override",
+          selected.id,
+          `${counter.employeeName} at ${counterLabel(counter.id)} manually selected ${selected.token} instead of recommended ${recommended.token} — queue override${reason ? ` (${reason})` : ""}`,
+          now
+        )
+        return selected
+      }
+      // the chosen customer IS the recommendation — normal assignment below
+    }
+    // stale override (customer left this counter) — discarded silently
+  }
 
   const nextId =
     counter.releasedQueue.shift() ??
@@ -210,6 +278,45 @@ export function assignNextEligibleCustomer(
 
   const customer = getCustomer(state, nextId)
   startService(state, counter, customer, now, via)
+  return customer
+}
+
+/**
+ * QUEUE OVERRIDE — the employee chooses a different eligible customer to be
+ * served next instead of the system recommendation. Passing null (or the
+ * recommended customer) reverts to pure automation. On a free counter the
+ * choice takes effect immediately; while serving, it is applied when the
+ * counter next becomes available. Never reorders the queue tiers.
+ */
+export function setNextOverride(
+  state: QueueState,
+  counterId: number,
+  customerId: string | null,
+  now: number,
+  reason: OverrideReason | null = null
+): Customer | null {
+  const counter = getCounter(state, counterId)
+  if (counter.status === "on-break") {
+    throw new Error(
+      `${counterLabel(counterId)} — resume work before choosing a customer`
+    )
+  }
+  if (customerId === null) {
+    counter.nextOverrideId = null
+    counter.nextOverrideReason = null
+    return null
+  }
+  const customer = getCustomer(state, customerId)
+  if (!eligibleCustomerIds(counter).includes(customerId)) {
+    // held, serving elsewhere, completed or waiting at another counter
+    throw new Error(
+      `${customer.token} is not eligible to be served at ${counterLabel(counterId)}`
+    )
+  }
+  counter.nextOverrideId = customerId
+  counter.nextOverrideReason = reason
+  // a free counter applies the employee's choice right away
+  assignNextEligibleCustomer(state, counterId, now)
   return customer
 }
 
@@ -488,6 +595,11 @@ export function transferCustomer(
     const step = customer.journey[customer.journey.length - 1]
     step.completedAt = now
     step.status = "completed"
+  }
+  // a pending override pointing at the departing customer becomes stale
+  if (from.nextOverrideId === customer.id) {
+    from.nextOverrideId = null
+    from.nextOverrideReason = null
   }
 
   // journey-aware placement — started journeys outrank new requests,

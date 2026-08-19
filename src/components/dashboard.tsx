@@ -22,6 +22,7 @@ import { KpiDrilldownDialog, type MainKpiId } from "@/components/kpi-drilldown"
 import { KpiStrip } from "@/components/kpi-strip"
 import { ManagerDashboard } from "@/components/manager-dashboard"
 import { NewCustomerCard } from "@/components/new-customer-card"
+import { OverrideDialog, type OverrideTarget } from "@/components/override-dialog"
 import { QueueBoard } from "@/components/queue-board"
 import { TransferDialog } from "@/components/transfer-dialog"
 import { WhyDialog } from "@/components/why-panel"
@@ -186,6 +187,7 @@ export function Dashboard() {
   const [transferCustomerId, setTransferCustomerId] = useState<string | null>(null)
   const [drilldownKpi, setDrilldownKpi] = useState<MainKpiId | null>(null)
   const [holdCustomerId, setHoldCustomerId] = useState<string | null>(null)
+  const [overrideTarget, setOverrideTarget] = useState<OverrideTarget | null>(null)
 
   useEffect(() => {
     init()
@@ -260,6 +262,9 @@ export function Dashboard() {
                   onSelectCustomer={setJourneyCustomerId}
                   onTransfer={setTransferCustomerId}
                   onHold={setHoldCustomerId}
+                  onOverride={(counterId, preselectedId) =>
+                    setOverrideTarget({ counterId, preselectedId })
+                  }
                 />
               </>
             ) : (
@@ -340,6 +345,11 @@ export function Dashboard() {
       <HoldDialog
         customerId={holdCustomerId}
         onClose={() => setHoldCustomerId(null)}
+      />
+      <OverrideDialog
+        target={overrideTarget}
+        onClose={() => setOverrideTarget(null)}
+        onOpenJourney={setJourneyCustomerId}
       />
     </div>
   )

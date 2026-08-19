@@ -2,6 +2,7 @@
 
 import {
   Activity,
+  ArrowUpDown,
   Clock,
   Gauge,
   ListChecks,
@@ -23,6 +24,7 @@ import {
   employeeUtilization,
   filterRecords,
   holdReasonDistribution,
+  overrideBreakdown,
   serviceAverages,
   stepRecords,
   type ManagerFilters,
@@ -42,6 +44,7 @@ export type ManagerKpiId =
   | "avg-service"
   | "utilization"
   | "holds"
+  | "overrides"
 
 const TITLES: Record<
   ManagerKpiId,
@@ -76,6 +79,11 @@ const TITLES: Record<
     title: "Hold & Break Activity",
     icon: PauseCircle,
     note: "Hold events, durations, reasons and employee break time. Neither holds nor breaks are ever counted as employee processing time.",
+  },
+  overrides: {
+    title: "Queue Overrides",
+    icon: ArrowUpDown,
+    note: "Every manual override of the automated recommendation — an operational metric, not a verdict. Overrides never reorder the queue; automation resumes immediately after.",
   },
 }
 
@@ -490,6 +498,100 @@ export function ManagerDrilldownDialog({
             Tokens with holds
           </p>
           <RecordsTable records={withHolds} onOpenJourney={onOpenJourney} />
+        </div>
+      </div>
+    )
+  }
+
+  if (kpi === "overrides") {
+    const info = overrideBreakdown(state, now, filters)
+    const pct = Math.round(info.rate * 1000) / 10
+    body = (
+      <div className="flex flex-col gap-3">
+        <div className="grid grid-cols-3 gap-2">
+          <StatTile label="Manual overrides" value={String(info.overrides)} />
+          <StatTile
+            label="Total assignments"
+            value={String(info.assignments)}
+            sub="automatic + manual"
+          />
+          <StatTile
+            label="Override rate"
+            value={info.assignments > 0 ? `${pct}%` : "—"}
+            sub="operational metric, not a verdict"
+          />
+        </div>
+        {info.rate >= 0.1 && info.overrides > 0 && (
+          <p className="rounded-lg border border-sky-200 bg-sky-50/60 px-3 py-2 text-[11px] text-sky-900">
+            <strong>{pct}% of assignments were manually overridden.</strong>{" "}
+            Employees are frequently deviating from automated recommendations —
+            worth investigating the operational context, not a misuse signal.
+          </p>
+        )}
+        <div>
+          <p className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+            Overrides by employee
+          </p>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b">
+                <Th>Employee</Th>
+                <Th>Counter</Th>
+                <Th right>Overrides</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {info.byEmployee.map((e) => (
+                <tr key={e.counterId} className="border-b border-border/50 last:border-0">
+                  <Td>{e.employeeName}</Td>
+                  <Td>{`Counter ${e.counterId}`}</Td>
+                  <Td right>{e.count}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <p className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+            Override history — recommended vs selected
+          </p>
+          {info.records.length > 0 ? (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b">
+                  <Th>Time</Th>
+                  <Th>Employee</Th>
+                  <Th>Counter</Th>
+                  <Th>Recommended</Th>
+                  <Th>Selected</Th>
+                  <Th>Reason</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {info.records.map((o) => (
+                  <tr key={o.id} className="border-b border-border/50 last:border-0">
+                    <Td>{formatTime(o.at)}</Td>
+                    <Td>{o.employeeName}</Td>
+                    <Td>{`Counter ${o.counterId}`}</Td>
+                    <Td>
+                      <span className="font-mono font-semibold">{o.recommendedToken}</span>{" "}
+                      <span className="text-muted-foreground">{o.recommendedName}</span>
+                    </Td>
+                    <Td>
+                      <span className="font-mono font-semibold text-primary">{o.selectedToken}</span>{" "}
+                      <span className="text-muted-foreground">{o.selectedName}</span>
+                    </Td>
+                    <Td>{o.reason ?? "—"}</Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="py-4 text-center text-xs text-muted-foreground">
+              No manual overrides — every assignment followed the automated
+              recommendation.
+            </p>
+          )}
         </div>
       </div>
     )

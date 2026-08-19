@@ -9,6 +9,7 @@ import { waitingCount } from "./queue-logic"
 import type {
   HoldReason,
   JourneyStepStatus,
+  OverrideRecord,
   QueueState,
   ServiceType,
 } from "./types"
@@ -275,6 +276,10 @@ export interface ManagerKpis {
   /** total employee break time in the window */
   totalBreakMs: number
   employeesOnBreak: number
+  /** manual queue overrides in the window */
+  overrides: number
+  /** overrides ÷ total assignments, 0..1 */
+  overrideRate: number
 }
 
 export function managerKpis(
@@ -300,6 +305,7 @@ export function managerKpis(
     rows.length > 0
       ? rows.reduce((a, b) => (b.actualProcessingMs > a.actualProcessingMs ? b : a))
       : null
+  const overrideInfo = overrideBreakdown(state, now, filters)
   return {
     tokensProcessed: completed.length,
     activeTokens,
@@ -316,6 +322,8 @@ export function managerKpis(
     tokensOnHold: state.counters.reduce((s, c) => s + c.heldIds.length, 0),
     totalBreakMs: rows.reduce((s, r) => s + r.breakMs, 0),
     employeesOnBreak: rows.filter((r) => r.onBreak).length,
+    overrides: overrideInfo.overrides,
+    overrideRate: overrideInfo.rate,
   }
 }
 
@@ -342,6 +350,65 @@ export function serviceAverages(records: StepRecord[]): ServiceAverage[] {
       avgProcessingMs: total / count,
     }))
     .sort((a, b) => b.avgProcessingMs - a.avgProcessingMs)
+}
+
+/* ------------------------------------------------------------------------- *
+ * Queue Override analytics — automation vs human judgment. An override rate
+ * is an OPERATIONAL metric, not a verdict: it simply shows how often
+ * employees exercised judgment over the automated recommendation.
+ * ------------------------------------------------------------------------- */
+
+export interface OverrideBreakdown {
+  /** manual overrides in the filtered window */
+  overrides: number
+  /** total service assignments (started steps) in the same window */
+  assignments: number
+  /** overrides ÷ assignments, 0..1 (0 when no assignments) */
+  rate: number
+  byEmployee: Array<{ employeeName: string; counterId: number; count: number }>
+  records: OverrideRecord[]
+}
+
+export function overrideBreakdown(
+  state: QueueState,
+  now: number,
+  filters: ManagerFilters = DEFAULT_FILTERS
+): OverrideBreakdown {
+  const windowMs = employeeCapacityMs(filters.time, state, now)
+  const records = state.overrides
+    .filter((o) => {
+      if (filters.employee !== "all" && o.employeeName !== filters.employee)
+        return false
+      if (filters.counter !== "all" && o.counterId !== filters.counter)
+        return false
+      if (o.at < now - windowMs) return false
+      return true
+    })
+    .slice()
+    .sort((a, b) => b.at - a.at)
+  const assignments = filterRecords(
+    stepRecords(state, now),
+    filters,
+    state,
+    now
+  ).length
+  const byEmployee = state.counters
+    .filter((c) => filters.counter === "all" || c.id === filters.counter)
+    .filter(
+      (c) => filters.employee === "all" || c.employeeName === filters.employee
+    )
+    .map((c) => ({
+      employeeName: c.employeeName,
+      counterId: c.id,
+      count: records.filter((o) => o.counterId === c.id).length,
+    }))
+  return {
+    overrides: records.length,
+    assignments,
+    rate: assignments > 0 ? records.length / assignments : 0,
+    byEmployee,
+    records,
+  }
 }
 
 export interface HoldReasonCount {

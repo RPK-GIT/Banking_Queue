@@ -12,16 +12,23 @@ import {
   holdCurrentCustomer,
   issueToken,
   releaseHold,
+  setNextOverride,
   startBreak,
   transferCustomer,
   type IssueTokenInput,
   type TransferResult,
 } from "./queue-logic"
 import { seedState } from "./seed"
-import type { Counter, Customer, HoldReason, QueueState } from "./types"
+import type {
+  Counter,
+  Customer,
+  HoldReason,
+  OverrideReason,
+  QueueState,
+} from "./types"
 
-// v3 — journey-aware FIFO tiers (releasedQueue) and employee breaks
-const STORAGE_KEY = "smart-bank-queue-v3"
+// v4 — queue-override fields and audit history
+const STORAGE_KEY = "smart-bank-queue-v4"
 
 export type DemoStatus = "idle" | "playing" | "paused"
 export type DemoSpeed = 0.5 | 1 | 2 | 4
@@ -45,6 +52,12 @@ interface QueueStore {
   release: (customerId: string) => Customer
   beginBreak: (counterId: number) => Counter
   finishBreak: (counterId: number) => Counter
+  armOverride: (
+    counterId: number,
+    customerId: string,
+    reason?: OverrideReason | null
+  ) => Customer | null
+  clearOverride: (counterId: number) => void
   resetDemo: () => void
   clearAll: () => void
   playDemo: () => void
@@ -64,15 +77,17 @@ function loadFromStorage(): QueueState | null {
     const storedIds = parsed.state.counters.map((c) => c.id).join(",")
     const currentIds = COUNTER_DEFS.map((c) => c.id).join(",")
     if (storedIds !== currentIds) return null
-    // discard pre-journey-aware state shapes (missing tier/break structures)
+    // discard pre-journey-aware / pre-override state shapes
     if (
       !parsed.state.counters.every(
         (c) =>
           Array.isArray(c.priorityQueue) &&
           Array.isArray(c.releasedQueue) &&
           Array.isArray(c.heldIds) &&
-          Array.isArray(c.breaks)
-      )
+          Array.isArray(c.breaks) &&
+          "nextOverrideId" in c
+      ) ||
+      !Array.isArray(parsed.state.overrides)
     ) {
       return null
     }
@@ -183,6 +198,20 @@ const DEMO_STEPS: DemoStep[] = [
     note: "SCENARIO G — T-104 completes: 4 stops, one hold, one break — fully traceable. T-116 is auto-assigned next.",
     run: (s) => void s.completeService(1),
   },
+  // --- QUEUE OVERRIDE: automation → human judgment → automation resumes ---
+  {
+    note: "QUEUE OVERRIDE — Counter 2's next recommended is T-111, but T-113 is ready first. Arjun chooses T-113 to be served next (human judgment, fully audited).",
+    run: (s) =>
+      void s.armOverride(2, byToken(s.state, "T-113").id, "Customer ready"),
+  },
+  {
+    note: "Counter 2 completes T-108 — the OVERRIDE serves T-113 instead of recommended T-111. T-111 keeps his exact queue position.",
+    run: (s) => void s.completeService(2),
+  },
+  {
+    note: "T-113 completes — AUTOMATION RESUMES: the engine again recommends T-111, whose priority was never touched by the override.",
+    run: (s) => void s.completeService(2),
+  },
   {
     note: "Counter 4 completes T-109 — queue empty, counter idles.",
     run: (s) => void s.completeService(4),
@@ -196,8 +225,12 @@ const DEMO_STEPS: DemoStep[] = [
     run: (s) => void s.completeService(1),
   },
   {
-    note: "Counter 3 completes T-112 — journey-aware FIFO, automatic assignment, holds and breaks all demonstrated.",
+    note: "Counter 3 completes T-112 — journey-aware FIFO, automatic assignment, holds, breaks and overrides all demonstrated.",
     run: (s) => void s.completeService(3),
+  },
+  {
+    note: "Counter 2 completes T-111 — automation first, human override when needed, no queue corruption, full traceability.",
+    run: (s) => void s.completeService(2),
   },
 ]
 
@@ -352,6 +385,16 @@ export const useQueueStore = create<QueueStore>((set, get) => {
 
     finishBreak: (counterId) =>
       mutate((draft) => endBreak(draft, counterId, Date.now())),
+
+    armOverride: (counterId, customerId, reason = null) =>
+      mutate((draft) =>
+        setNextOverride(draft, counterId, customerId, Date.now(), reason)
+      ),
+
+    clearOverride: (counterId) =>
+      void mutate((draft) =>
+        setNextOverride(draft, counterId, null, Date.now())
+      ),
 
     resetDemo: () => {
       clearDemoTimer()

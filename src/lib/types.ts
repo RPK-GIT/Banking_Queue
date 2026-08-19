@@ -118,6 +118,38 @@ export interface Counter {
   heldIds: string[]
   /** employee break log, oldest first — open break = last entry, endedAt null */
   breaks: BreakRecord[]
+  /**
+   * QUEUE OVERRIDE — an employee's pending "serve this one next" choice.
+   * Applied exactly ONCE by the assignment engine when the counter next
+   * becomes free; the queue tiers themselves are NEVER reordered.
+   */
+  nextOverrideId: string | null
+  nextOverrideReason: string | null
+}
+
+export const OVERRIDE_REASONS = [
+  "Customer ready",
+  "Customer urgency",
+  "Operational reason",
+  "Customer request",
+  "Other",
+] as const
+
+export type OverrideReason = (typeof OVERRIDE_REASONS)[number]
+
+/** Audit record — every manual queue override, recorded when it takes effect. */
+export interface OverrideRecord {
+  id: string
+  /** epoch ms — when the override actually assigned the selected customer */
+  at: number
+  counterId: number
+  employeeName: string
+  recommendedToken: string
+  recommendedName: string
+  selectedToken: string
+  selectedName: string
+  /** reason is always OPTIONAL — never force the employee to justify */
+  reason: OverrideReason | null
 }
 
 export type ActivityType =
@@ -130,6 +162,7 @@ export type ActivityType =
   | "hold-released"
   | "break-started"
   | "break-ended"
+  | "queue-override"
   | "reset"
 
 export interface Activity {
@@ -144,5 +177,7 @@ export interface QueueState {
   customers: Record<string, Customer>
   counters: Counter[]
   activities: Activity[]
+  /** full queue-override audit history, oldest first */
+  overrides: OverrideRecord[]
   nextTokenNumber: number
 }

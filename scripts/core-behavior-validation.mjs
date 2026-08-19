@@ -201,6 +201,92 @@ check(
     conversation.split("temporarily paused").length === 2
 )
 
+// ---- QUEUE OVERRIDE: automation → human judgment → automation resumes ----
+// Counter 2 is serving T-105; give it two waiting customers
+await issueCustomer("Probe Six", "Counter 2") // T-106 — recommended next
+await issueCustomer("Probe Seven", "Counter 2") // T-107 — lower priority
+check(
+  "counter shows the NEXT RECOMMENDED customer (T-106)",
+  (await page.locator(`${counterCard(2)} >> text=Next recommended`).count()) === 1 &&
+    (await page.locator(`${counterCard(2)} >> text=T-106`).count()) >= 1
+)
+
+// Choose Another → select the lower-priority customer → confirm
+await page.click("button[aria-label='Choose another customer — Counter 2']")
+await page.waitForSelector("text=Choose Customer — Counter 2", { timeout: 5000 })
+check(
+  "Choose Customer panel shows the recommended customer and groups",
+  (await page.locator("div[data-slot='dialog-content'] >> text=Serve Recommended").count()) >= 1 &&
+    (await page.locator("div[data-slot='dialog-content'] >> text=New requests").count()) === 1
+)
+await page.click("div[data-slot='dialog-content'] button:has-text('T-107')")
+await page.waitForSelector("text=Override Queue Order?", { timeout: 5000 })
+await page.click("button:has-text('Customer ready')") // optional reason
+await page.click("button:has-text('Serve T-107')")
+await page.waitForSelector(`${counterCard(2)} >> text=queue override`, { timeout: 5000 })
+check("override armed — counter shows UP NEXT (override) with T-107", true)
+
+// completion applies the override; the bypassed customer keeps position #1
+await page.click(`${counterCard(2)} button:has-text('Complete')`)
+await page.waitForSelector(nowServing(2, "T-107"), { timeout: 5000 })
+check(
+  "override serves T-107; recommended T-106 keeps its original position",
+  (await page.locator(`${counterCard(2)} >> text=#1 in queue`).count()) === 1 &&
+    (await page.locator(`${counterCard(2)} >> text=T-106`).count()) >= 1
+)
+
+// the override lands in Live Activity
+await page.click("button[aria-label^='Toggle live activity']")
+await page.waitForSelector("text=Live Activity", { timeout: 5000 })
+check(
+  "Live Activity records the override (employee, selected vs recommended)",
+  (await page.locator("text=/Arjun at Counter 2 manually selected T-107 instead of recommended T-106/").count()) === 1
+)
+await page.click("button[aria-label='Close activity panel']")
+await page.waitForTimeout(300)
+
+// automation resumes with the original recommendation
+await page.click(`${counterCard(2)} button:has-text('Complete')`)
+await page.waitForSelector(nowServing(2, "T-106"), { timeout: 5000 })
+check("after the override completes, automation serves the original T-106", true)
+
+// transfer from the queue — journey-aware placement at the destination
+await issueCustomer("Probe Eight", "Counter 2") // waits at C2 (T-108)
+await page
+  .locator("button[aria-label='Transfer T-108 to another counter']")
+  .click({ force: true })
+await page.waitForSelector("text=Transfer to Another Counter", { timeout: 5000 })
+await page.click("div[data-slot='dialog-content'] button:has-text('Counter 3')")
+await page.click("button:has-text('Transfer Customer')")
+await page.waitForSelector(nowServing(3, "T-108"), { timeout: 5000 })
+check("transfer from queue works — idle destination serves immediately", true)
+
+// Manager Dashboard: Queue Overrides KPI + drill-down
+await page.click("button:has-text('Manager Dashboard')")
+await page.waitForSelector("text=Employee Workload", { timeout: 5000 })
+check(
+  "Queue Overrides KPI counts the manual override",
+  (await page.locator("button[aria-label='Queue Overrides — drill down'] >> text=1").count()) >= 1
+)
+await page.click("button[aria-label='Queue Overrides — drill down']")
+await page.waitForSelector("text=Override history", { timeout: 5000 })
+check(
+  "override drill-down shows employee, counter, recommended vs selected and reason",
+  (await page.locator("div[data-slot='dialog-content'] >> text=Arjun").count()) >= 1 &&
+    (await page.locator("div[data-slot='dialog-content'] >> text=T-106").count()) >= 1 &&
+    (await page.locator("div[data-slot='dialog-content'] >> text=T-107").count()) >= 1 &&
+    (await page.locator("div[data-slot='dialog-content'] >> text=Customer ready").count()) >= 1
+)
+check(
+  "override rate is displayed",
+  (await page.locator("div[data-slot='dialog-content'] >> text=Override rate").count()) === 1
+)
+await page.screenshot({ path: `${shots}/core-override-drilldown.png` })
+await page.keyboard.press("Escape")
+await page.waitForTimeout(300)
+await page.click("button:has-text('Operations')")
+await page.waitForSelector(queues, { timeout: 5000 })
+
 // ---- Live Demo: scenarios A–G, pause interactivity, resume ----
 await page.click("button:has-text('Restart')")
 await page.waitForTimeout(300)
@@ -254,6 +340,22 @@ check(
     raviConversation.split("temporarily paused").length === 2
 )
 await page.screenshot({ path: `${shots}/core-demo-complete.png` })
+
+// the demo's scripted override (T-113 over T-111) is audited exactly once
+await page.click("button:has-text('Manager Dashboard')")
+await page.waitForSelector("text=Employee Workload", { timeout: 5000 })
+check(
+  "demo: Queue Overrides KPI shows exactly the one scripted override",
+  (await page.locator("button[aria-label='Queue Overrides — drill down'] >> text=1").count()) >= 1
+)
+await page.click("button[aria-label='Queue Overrides — drill down']")
+await page.waitForSelector("text=Override history", { timeout: 5000 })
+check(
+  "demo: override history records T-113 selected over recommended T-111",
+  (await page.locator("div[data-slot='dialog-content'] >> text=T-113").count()) >= 1 &&
+    (await page.locator("div[data-slot='dialog-content'] >> text=T-111").count()) >= 1
+)
+await page.keyboard.press("Escape")
 
 await browser.close()
 

@@ -26,7 +26,7 @@ import {
 import { CustomerCard } from "@/components/customer-card"
 import { stepProcessingMs } from "@/lib/durations"
 import { formatDuration } from "@/lib/format"
-import { waitingCount } from "@/lib/queue-logic"
+import { getNextEligibleCustomer, waitingCount } from "@/lib/queue-logic"
 import { useQueueStore } from "@/lib/queue-store"
 import type { Counter } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -40,6 +40,8 @@ interface CounterColumnProps {
   onSelectCustomer: (customerId: string) => void
   onTransfer: (customerId: string) => void
   onHold: (customerId: string) => void
+  /** open the Choose Customer (queue override) panel for this counter */
+  onOverride: (counterId: number, preselectedId?: string) => void
 }
 
 export function CounterColumn({
@@ -48,13 +50,16 @@ export function CounterColumn({
   onSelectCustomer,
   onTransfer,
   onHold,
+  onOverride,
 }: CounterColumnProps) {
-  const customers = useQueueStore((s) => s.state.customers)
+  const state = useQueueStore((s) => s.state)
+  const customers = state.customers
   const callNext = useQueueStore((s) => s.callNext)
   const completeService = useQueueStore((s) => s.completeService)
   const release = useQueueStore((s) => s.release)
   const beginBreak = useQueueStore((s) => s.beginBreak)
   const finishBreak = useQueueStore((s) => s.finishBreak)
+  const clearOverride = useQueueStore((s) => s.clearOverride)
   const [showAll, setShowAll] = useState(false)
 
   const onBreak = counter.status === "on-break"
@@ -62,6 +67,11 @@ export function CounterColumn({
     ? customers[counter.currentCustomerId]
     : null
   const servingStep = serving?.journey[serving.journey.length - 1]
+
+  const recommended = getNextEligibleCustomer(state, counter.id)
+  const overrideTarget = counter.nextOverrideId
+    ? customers[counter.nextOverrideId]
+    : null
 
   const hiddenCount = counter.queue.length - VISIBLE_QUEUE_LIMIT
   const visibleQueue =
@@ -344,6 +354,69 @@ export function CounterColumn({
         </AnimatePresence>
       </div>
 
+      {/* NEXT RECOMMENDED — automation's pick; the employee may Choose Another */}
+      {serving && !onBreak && recommended && (
+        <div
+          className={cn(
+            "shrink-0 border-b px-3 py-1.5",
+            overrideTarget ? "bg-violet-50/50" : "bg-emerald-50/40"
+          )}
+        >
+          {overrideTarget ? (
+            <>
+              <p className="flex items-center gap-1 text-[10px] font-semibold tracking-wide text-violet-700 uppercase">
+                <ArrowRightLeft className="size-3 rotate-90" aria-hidden />
+                Up next — queue override
+              </p>
+              <div className="mt-0.5 flex items-center justify-between gap-2">
+                <p className="min-w-0 truncate text-[11px]">
+                  <span className="font-mono font-semibold text-violet-800">
+                    {overrideTarget.token}
+                  </span>{" "}
+                  <span className="text-violet-950">{overrideTarget.name}</span>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => clearOverride(counter.id)}
+                  className="shrink-0 rounded-md border border-violet-300 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 outline-none hover:bg-violet-100 focus-visible:ring-2 focus-visible:ring-ring/60"
+                >
+                  ✓ Serve Recommended
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-[10px] font-semibold tracking-wide text-emerald-700 uppercase">
+                Next recommended
+              </p>
+              <div className="mt-0.5 flex items-center justify-between gap-2">
+                <p className="min-w-0 truncate text-[11px]">
+                  <span className="font-mono font-semibold text-emerald-800">
+                    {recommended.token}
+                  </span>{" "}
+                  <span className="text-emerald-950">{recommended.name}</span>
+                  <span className="text-emerald-800/60">
+                    {" "}
+                    ·{" "}
+                    {recommended.journey.length > 1
+                      ? `journey · from C${recommended.journey[recommended.journey.length - 2].counterId}`
+                      : "new request"}
+                  </span>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onOverride(counter.id)}
+                  aria-label={`Choose another customer — Counter ${counter.id}`}
+                  className="shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+                >
+                  ↕ Choose Another
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* NEXT AFTER CURRENT — released holds, first precedence */}
       {counter.releasedQueue.length > 0 && (
         <div className="shrink-0 border-b border-violet-200 bg-violet-50/70 px-3 py-1.5">
@@ -393,28 +466,52 @@ export function CounterColumn({
               const customer = tierCustomer(customerId)
               if (!customer) return null
               return (
-                <button
+                <div
                   key={customer.id}
-                  type="button"
-                  onClick={() => onSelectCustomer(customer.id)}
-                  title={`View ${customer.token}'s journey`}
-                  className="w-full rounded-lg border border-sky-300 bg-white px-2.5 py-1.5 text-left outline-none hover:border-sky-400 focus-visible:ring-2 focus-visible:ring-ring/60"
+                  className="group rounded-lg border border-sky-300 bg-white px-2.5 py-1.5"
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-xs font-semibold text-sky-800">
-                      {customer.token}
-                    </span>
-                    <span className="rounded-full bg-sky-100 px-1.5 py-px text-[10px] font-semibold tabular-nums text-sky-700">
-                      priority #{counter.releasedQueue.length + index + 1}
-                    </span>
-                  </div>
-                  <p className="truncate text-[12px] font-medium text-sky-950">
-                    {customer.name}
-                  </p>
-                  <p className="truncate text-[10px] text-sky-800/70">
-                    stop {customer.journey.length} of a continuing journey
-                  </p>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectCustomer(customer.id)}
+                    title={`View ${customer.token}'s journey`}
+                    className="w-full text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-xs font-semibold text-sky-800">
+                        {customer.token}
+                      </span>
+                      <span className="rounded-full bg-sky-100 px-1.5 py-px text-[10px] font-semibold tabular-nums text-sky-700">
+                        priority #{counter.releasedQueue.length + index + 1}
+                      </span>
+                    </div>
+                    <p className="truncate text-[12px] font-medium text-sky-950">
+                      {customer.name}
+                    </p>
+                    <p className="truncate text-[10px] text-sky-800/70">
+                      stop {customer.journey.length} of a continuing journey
+                    </p>
+                  </button>
+                  {!onBreak && (
+                    <div className="mt-1 flex items-center gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+                      <button
+                        type="button"
+                        aria-label={`Serve ${customer.token} next (queue override)`}
+                        onClick={() => onOverride(counter.id, customer.id)}
+                        className="rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground outline-none hover:bg-violet-50 hover:text-violet-700 focus-visible:ring-2 focus-visible:ring-ring/60"
+                      >
+                        Serve
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Transfer ${customer.token} to another counter`}
+                        onClick={() => onTransfer(customer.id)}
+                        className="rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+                      >
+                        Transfer
+                      </button>
+                    </div>
+                  )}
+                </div>
               )
             })}
           </div>
@@ -443,6 +540,12 @@ export function CounterColumn({
                   position={newOffset + index + 1}
                   now={now}
                   onSelect={onSelectCustomer}
+                  onServeNext={
+                    onBreak
+                      ? undefined
+                      : (id) => onOverride(counter.id, id)
+                  }
+                  onTransfer={onTransfer}
                 />
               )
             })}

@@ -8,12 +8,14 @@ interface QueueBoardProps {
   onSelectCustomer: (customerId: string) => void
   onTransfer: (customerId: string) => void
   onHold: (customerId: string) => void
+  onOverride: (counterId: number, preselectedId?: string) => void
 }
 
 export function QueueBoard({
   onSelectCustomer,
   onTransfer,
   onHold,
+  onOverride,
 }: QueueBoardProps) {
   const counters = useQueueStore((s) => s.state.counters)
   const now = useNow(1000)
@@ -35,6 +37,7 @@ export function QueueBoard({
             onSelectCustomer={onSelectCustomer}
             onTransfer={onTransfer}
             onHold={onHold}
+            onOverride={onOverride}
           />
         ))}
       </div>
